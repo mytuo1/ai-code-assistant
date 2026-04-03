@@ -26,6 +26,21 @@ import { EVENT_HANDLER_PROPS } from './events/event-handlers.js'
 import { getFocusManager, getRootNode } from './focus.js'
 import { LayoutDisplay } from './layout/node.js'
 import applyStyles, { type Styles, type TextStyles } from './styles.js'
+// ================================================
+// REACT 19 / ACT QUEUE PATCH — required for Ink + modern reconciler
+// Prevents "ReactCurrentActQueue.current is undefined" in DEV mode
+// ================================================
+import * as React from 'react';
+
+if (typeof (React as any).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED !== 'undefined') {
+  const internals = (React as any).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED;
+  if (!internals.ReactCurrentActQueue) {
+    internals.ReactCurrentActQueue = { current: null };
+  }
+  if (!internals.ReactCurrentOwner) {
+    internals.ReactCurrentOwner = { current: null };
+  }
+}
 
 // We need to conditionally perform devtools connection to avoid
 // accidentally breaking other third-party code.
@@ -503,10 +518,71 @@ const reconciler = createReconciler<
   resolveEventTimeStamp(): number {
     return dispatcher.currentEvent?.timeStamp ?? -1.1
   },
+    getCurrentEventPriority() {
+      // For terminal/CLI renderers (Ink), there are no browser events.
+      // Always use DefaultEventPriority (safe and standard for non-DOM renderers).
+      try {
+        // Try to get the constant from the patched constants (your install-shims.js already handles this)
+        const constants = require('react-reconciler/constants');
+        return constants.DefaultEventPriority ?? 16;
+      } catch {
+        return 16; // DefaultEventPriority value in React 18/19
+      }
+    },
 })
-
 // Wire the reconciler's discreteUpdates into the dispatcher.
 // This breaks the import cycle: dispatcher.ts doesn't import reconciler.ts.
 dispatcher.discreteUpdates = reconciler.discreteUpdates.bind(reconciler)
 
+// ================================================
+// OPEN-SOURCE SHIMS — added at the very bottom
+// These fix the missing methods called by ink.tsx during render/unmount.
+// ================================================
+
+// 1. updateContainerSync (called in render and unmount)
+reconciler.updateContainerSync = function (
+  element: any,
+  container: any,
+  parentComponent: any,
+  callback: any
+) {
+  return reconciler.updateContainer(element, container, parentComponent, callback);
+};
+
+// 2. flushSyncWork (perf no-op from original internal build)
+reconciler.flushSyncWork = function () {
+  // No-op
+};
+
+// 3. getCurrentEventPriority (required by react-reconciler during updateContainer)
+reconciler.getCurrentEventPriority = function () {
+  // For terminal renderers like Ink, DefaultEventPriority is the safe choice
+  try {
+    // Try to import the constant from the reconciler package
+    const constants = require('react-reconciler/constants');
+    return constants.DefaultEventPriority ?? 16;
+  } catch {
+    return 16; // fallback value for DefaultEventPriority
+  }
+};
+
+// Export the (now augmented) reconciler
 export default reconciler
+// ================================================
+// FINAL SHIM FOR OFFICIAL react-reconciler (used internally by ink.tsx)
+// getCurrentEventPriority is required in newer versions during updateContainer.
+// ================================================
+const ReactReconciler = require('react-reconciler');
+
+if (ReactReconciler && typeof ReactReconciler.getCurrentEventPriority !== 'function') {
+  // Augment the default export / main object
+  (ReactReconciler as any).getCurrentEventPriority = function getCurrentEventPriority() {
+    // For a terminal renderer (Ink), always use DefaultEventPriority (no browser events)
+    try {
+      const constants = require('react-reconciler/constants');
+      return constants.DefaultEventPriority ?? 16;
+    } catch (e) {
+      return 16; // Safe fallback (DefaultEventPriority value in recent React)
+    }
+  };
+}
