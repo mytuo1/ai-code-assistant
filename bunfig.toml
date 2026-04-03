@@ -1,0 +1,5 @@
+[install]
+optional = false
+
+[alias]
+"react/compiler-runtime" = "react-compiler-runtime"

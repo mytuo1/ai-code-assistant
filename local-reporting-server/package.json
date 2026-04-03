@@ -1,0 +1,13 @@
+{
+  "name": "local-reporting-server",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types server.ts",
+    "start:bun": "bun server.ts",
+    "start:compiled": "node dist/server.js"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  }
+}

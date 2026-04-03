@@ -1,0 +1,12 @@
+export const BROWSER_TOOLS: any[];
+export function buildComputerUseTools(...args: any[]): any;
+export function bindSessionContext(...args: any[]): any;
+export const DEFAULT_GRANT_FLAGS: any;
+export type ComputerUseAPI = any;
+export type ComputerUseSessionContext = any;
+export type CuCallToolResult = any;
+export type CuPermissionRequest = any;
+export type CuPermissionResponse = any;
+export type ScreenshotDims = any;
+export const API_RESIZE_PARAMS: any;
+export function targetImageSize(...args: any[]): any;

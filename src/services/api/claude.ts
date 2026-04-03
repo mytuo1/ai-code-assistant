@@ -1,0 +1,28 @@
+// Re-export from llm.ts — OpenAI-compatible API layer
+export {
+  toolToAPISchema,
+  normalizeMessagesForAPI,
+  buildSystemPromptBlocks,
+  queryModelWithStreaming,
+  queryModelWithoutStreaming,
+  queryWithModel,
+  queryHaiku,
+  verifyApiKey,
+  getExtraBodyParams,
+  getMergedBetas,
+  getMaxOutputTokensForModel,
+  stripExcessMediaItems,
+  detectPromptCacheBreak,
+  cleanupStream,
+  updateUsage,
+  accumulateUsage,
+  getPromptCachingEnabled,
+  getCacheControl,
+  addCacheBreakpoints,
+  configureTaskBudgetParams,
+  getAPIMetadata,
+  executeNonStreamingRequest,
+  adjustParamsForNonStreaming,
+  MAX_NON_STREAMING_TOKENS,
+} from './llm.js'
+export type { Options, BetaUsage } from './llm.js'

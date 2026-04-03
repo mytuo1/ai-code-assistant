@@ -1,0 +1,13 @@
+{
+  "name": "@ant/computer-use-input",
+  "version": "0.0.1",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "type": "module",
+  "module": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./types": "./index.js",
+    "./sentinelApps": "./index.js"
+  }
+}
