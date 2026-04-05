@@ -1,0 +1,74 @@
+# AI Code Assistant REPL Configuration
+# Place this in your project root as: .ai-assistant-config.yaml
+
+# Provider selection: "openai" | "xai" | "ollama" | "azure" | "proxy"
+provider: "openai"
+
+# API authentication
+apiKey: "${OPENAI_API_KEY}"           # Resolves from env var
+# apiBaseUrl: "https://api.openai.com" # Override if using proxy
+
+# Model selection
+mainLoopModel: "gpt-4o"          # Primary reasoning model
+smallFastModel: "gpt-4-mini"          # For quick operations
+contextWindowSize: 128000             # Max tokens for this model
+
+# System prompt (default is generic, can override here)
+systemPrompt: |
+  You are a helpful code assistant. You have access to tools to:
+  - Read and write files in the project
+  - Execute shell commands
+  - Access external services via MCP servers
+  - Take screenshots and interact with the UI (if enabled)
+  
+  When the user asks you to do something, use these tools as needed. 
+  Ask for confirmation before making destructive changes.
+
+# Tool configuration
+tools:
+  enabled:
+    - "file_read"                   # Read files
+    - "file_write"                  # Write files
+    - "bash"                        # Shell commands
+    - "mcp"                         # MCP servers
+    # - "computer_use"              # Screenshot + interact (if supported)
+
+  # Scope file operations to project directory or unrestricted
+  fileOpsScope: "project"            # "project" | "unrestricted"
+  workingDirectory: "."              # Relative to where REPL starts
+
+  # Computer use (if your model + provider supports it)
+  computerUseEnabled: false
+
+  # Permission mode for tools
+  permissionMode: "interactive"      # "interactive" | "auto" | "ask"
+  
+  # Remember Y/N choices for tools
+  rememberPermissions: true
+
+# MCP (Model Context Protocol) server configuration
+mcp:
+  enabled: false                      # Set to true to use MCP servers
+  servers: []
+  # Example:
+  # servers:
+  #   - name: "github"
+  #     command: "node github-mcp-server.js"
+  #     env:
+  #       GITHUB_TOKEN: "${GITHUB_TOKEN}"
+
+# Streaming & output
+streaming:
+  enabled: true                       # Stream tokens in real-time
+  displayToolCalls: true              # Show when tools are detected
+  displayToolResults: true            # Show tool output
+
+# Conversation settings
+conversation:
+  maxHistory: 100                     # Keep up to N messages
+  persistSession: true                # Save sessions to disk
+  sessionFile: "~/.ai-assistant/sessions.json"
+
+# Debug settings
+debug: false                          # Verbose internal logging
+verbose: false                        # User-facing verbose output
