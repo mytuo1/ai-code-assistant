@@ -1,9 +1,11 @@
 /**
  * Tool Router - Match user queries to available tools locally
- * Bypasses API tool schemas entirely (0 token cost)
+ * Supports all 27 tools + 3-tier modification workflow
+ * Bypasses API tool schemas entirely (0 token cost for direct execution)
  */
 
 import type { Tools } from '../Tool.js'
+import { detectModificationIntent } from './modification-intent.js'
 
 export interface ToolMatch {
   tool: any
@@ -22,83 +24,254 @@ export function matchToolsForQuery(
   const query = userQuery.toLowerCase()
   const matches: ToolMatch[] = []
 
-  // Tool keyword mappings - MUST match actual tool names!
-  const toolPatterns: Record<string, { keywords: string[]; confidence: number }> = {
-    // Actual tool names from getAllBaseTools()
-    Bash: {
-      keywords: [
-        'bash',
-        'run',
-        'execute',
-        'command',
-        'shell',
-        'script',
-        'npm',
-        'bun',
-        'find',
-        'grep',
-        'ls',
-      ],
+  // Tool keyword mappings - ALL 27 TOOLS
+  const toolPatterns: Record<string, { keywords: string[]; confidence: number; modification?: boolean }> = {
+    // FILE OPERATIONS (Direct execution tier)
+    Read: {
+      keywords: ['read', 'show', 'view', 'display', 'content', 'file', 'check', 'what', 'line', 'cat'],
       confidence: 0.95,
     },
-    Read: {
-      keywords: [
-        'read',
-        'show',
-        'view',
-        'display',
-        'content',
-        'file',
-        'check',
-        'what',
-        'line',
-        'cat',
-      ],
-      confidence: 0.9,
-    },
     Write: {
-      keywords: [
-        'write',
-        'create',
-        'save',
-        'generate',
-        'output',
-        'file',
-        'make',
-        'new',
-      ],
-      confidence: 0.9,
+      keywords: ['write', 'create', 'save', 'generate', 'output', 'file', 'make', 'new'],
+      confidence: 0.90,
+      modification: true,
     },
     Edit: {
-      keywords: [
-        'edit',
-        'modify',
-        'change',
-        'update',
-        'replace',
-        'fix',
-        'patch',
-        'refactor',
-      ],
-      confidence: 0.9,
+      keywords: ['edit', 'modify', 'change', 'update', 'replace', 'fix', 'patch', 'refactor'],
+      confidence: 0.95,
+      modification: true,
     },
+    Glob: {
+      keywords: ['glob', 'find', 'list', 'search', 'pattern', 'files', 'ls', 'dir'],
+      confidence: 0.85,
+    },
+    Grep: {
+      keywords: ['grep', 'search', 'find', 'match', 'pattern', 'contains', 'look'],
+      confidence: 0.85,
+    },
+
+    // BASH/SHELL (Direct execution tier)
+    Bash: {
+      keywords: ['bash', 'run', 'execute', 'command', 'shell', 'script', 'npm', 'bun', 'yarn', 'make', 'test'],
+      confidence: 0.95,
+    },
+    PowerShell: {
+      keywords: ['powershell', 'ps', 'windows', 'cmd', 'command'],
+      confidence: 0.90,
+    },
+
+    // WEB (Direct execution tier)
     WebSearch: {
-      keywords: [
-        'search',
-        'find',
-        'look',
-        'query',
-        'research',
-        'web',
-        'google',
-        'info',
-        'what',
-      ],
+      keywords: ['search', 'web', 'find', 'google', 'query', 'research', 'lookup'],
       confidence: 0.85,
     },
     WebFetch: {
-      keywords: [
-        'fetch',
+      keywords: ['fetch', 'get', 'retrieve', 'download', 'url', 'http', 'api'],
+      confidence: 0.85,
+    },
+
+    // CODE ANALYSIS
+    LSP: {
+      keywords: ['lsp', 'type', 'definition', 'reference', 'hover', 'diagnostic', 'error', 'lint'],
+      confidence: 0.80,
+    },
+
+    // NOTEBOOK/CELL OPERATIONS
+    NotebookEdit: {
+      keywords: ['notebook', 'cell', 'ipynb', 'jupyter'],
+      confidence: 0.85,
+      modification: true,
+    },
+
+    // TASKS/WORKFLOW
+    TaskCreate: {
+      keywords: ['task', 'create', 'todo', 'schedule', 'add'],
+      confidence: 0.80,
+      modification: true,
+    },
+    TaskGet: {
+      keywords: ['task', 'get', 'list', 'show', 'view'],
+      confidence: 0.75,
+    },
+
+    // AGENTS/SKILLS
+    Agent: {
+      keywords: ['agent', 'delegate', 'autonomous', 'run'],
+      confidence: 0.75,
+    },
+    Skill: {
+      keywords: ['skill', 'custom', 'function', 'plugin', 'extension'],
+      confidence: 0.75,
+    },
+
+    // MCP (Model Context Protocol)
+    ReadMcpResource: {
+      keywords: ['mcp', 'resource', 'read', 'fetch'],
+      confidence: 0.80,
+    },
+    ListMcpResources: {
+      keywords: ['mcp', 'list', 'resources', 'available'],
+      confidence: 0.75,
+    },
+    MCPTool: {
+      keywords: ['mcp', 'tool', 'call'],
+      confidence: 0.80,
+    },
+    McpAuth: {
+      keywords: ['mcp', 'auth', 'authenticate'],
+      confidence: 0.75,
+    },
+
+    // INTERACTION
+    AskUserQuestion: {
+      keywords: ['ask', 'question', 'confirm', 'prompt', 'user'],
+      confidence: 0.85,
+    },
+    SendMessage: {
+      keywords: ['send', 'message', 'notify', 'alert'],
+      confidence: 0.80,
+      modification: true,
+    },
+
+    // WORKSPACE/MODE
+    EnterPlanMode: {
+      keywords: ['plan', 'mode', 'enter', 'start'],
+      confidence: 0.75,
+    },
+    ExitPlanMode: {
+      keywords: ['exit', 'plan', 'mode', 'end'],
+      confidence: 0.75,
+    },
+    EnterWorktree: {
+      keywords: ['worktree', 'enter', 'switch'],
+      confidence: 0.75,
+    },
+    ExitWorktree: {
+      keywords: ['worktree', 'exit', 'leave'],
+      confidence: 0.75,
+    },
+
+    // UTILITY
+    Config: {
+      keywords: ['config', 'configure', 'setting', 'setup'],
+      confidence: 0.80,
+    },
+    Brief: {
+      keywords: ['brief', 'summary', 'overview'],
+      confidence: 0.75,
+    },
+    Sleep: {
+      keywords: ['sleep', 'wait', 'pause', 'delay'],
+      confidence: 0.80,
+    },
+    ScheduleCron: {
+      keywords: ['schedule', 'cron', 'timer'],
+      confidence: 0.80,
+      modification: true,
+    },
+    REPL: {
+      keywords: ['repl', 'interactive', 'shell'],
+      confidence: 0.85,
+    },
+    RemoteTrigger: {
+      keywords: ['remote', 'trigger', 'webhook', 'callback'],
+      confidence: 0.75,
+    },
+    SyntheticOutput: {
+      keywords: ['synthetic', 'output', 'generate'],
+      confidence: 0.70,
+    },
+  }
+
+  // Check modification intent
+  const modIntent = detectModificationIntent(userQuery)
+
+  // Score all tools
+  for (const [toolName, pattern] of Object.entries(toolPatterns)) {
+    let score = 0
+
+    // Check keywords
+    for (const keyword of pattern.keywords) {
+      if (query.includes(keyword)) {
+        score = Math.max(score, pattern.confidence)
+        break
+      }
+    }
+
+    // Boost if modification tool and query is modification
+    if (pattern.modification && modIntent.isModification) {
+      score = Math.max(score, pattern.confidence * 0.9)
+    }
+
+    if (score > 0.3) {
+      const tool = availableTools.find((t) => t.name === toolName)
+      if (tool) {
+        matches.push({
+          tool,
+          confidence: score,
+          reason: `Matched keyword(s) for ${toolName}`,
+        })
+      }
+    }
+  }
+
+  return matches.sort((a, b) => b.confidence - a.confidence)
+}
+
+/**
+ * Determine if query needs direct execution (0 tokens)
+ * or LLM-based modification (40-60 tokens)
+ */
+export function getExecutionTier(
+  userQuery: string,
+  matchedTools: ToolMatch[]
+): 'direct' | 'modification' | 'analysis' {
+  // Tier 1: Direct execution (read/bash/simple actions)
+  const directTools = ['Read', 'Bash', 'PowerShell', 'Glob', 'Grep']
+  if (matchedTools.some((m) => directTools.includes(m.tool.name)) && matchedTools[0]?.confidence > 0.6) {
+    return 'direct'
+  }
+
+  // Tier 2: Modification (needs LLM + specific tools)
+  const modificationTools = ['Write', 'Edit', 'NotebookEdit', 'TaskCreate']
+  const modIntent = detectModificationIntent(userQuery)
+  if (modIntent.isModification && modificationTools.some((t) => matchedTools.map((m) => m.tool.name).includes(t))) {
+    return 'modification'
+  }
+
+  // Tier 3: Analysis/Question
+  return 'analysis'
+}
+
+/**
+ * Check if query suggests direct tool execution
+ */
+export function needsDirectExecution(userQuery: string): boolean {
+  const query = userQuery.toLowerCase()
+  // Quick check for direct execution keywords
+  const directKeywords = [
+    'bash',
+    'run',
+    'execute',
+    'read',
+    'show',
+    'view',
+    'find',
+    'grep',
+    'search',
+    'ls',
+    'cat',
+  ]
+  return directKeywords.some((kw) => query.includes(kw))
+}
+
+/**
+ * Check if result needs LLM interpretation (long output)
+ */
+export function needsLLMInterpretation(output: string): boolean {
+  // If output is very long, ask LLM to summarize
+  return output.split('\n').length > 50 || output.length > 5000
+}
         'get',
         'download',
         'url',

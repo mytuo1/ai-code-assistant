@@ -39,8 +39,9 @@ import { REPL_PROJECT_SCOPE, isPathAllowed } from './project-scope.js'
 import { getSystemPrompt } from './system-prompt.js'
 import { ContextCache, compressToolOutput } from './context-cache.js'
 import { getTokenTracker } from './token-tracker.js'
-import { matchToolsForQuery, needsDirectExecution, needsLLMInterpretation } from './tool-router.js'
+import { matchToolsForQuery, needsDirectExecution, needsLLMInterpretation, getExecutionTier } from './tool-router.js'
 import { tryDirectExecution, formatToolResult, buildToolResultMessage } from './tool-executor.js'
+import { detectModificationIntent } from './modification-intent.js'
 
 export interface ConversationMessage {
   id: string
@@ -229,30 +230,54 @@ export class REPL {
       content: userInput,
     })
 
-    // Step 1: Try direct tool execution first (0 API tokens)
-    const directResult = await this.tryDirectToolExecution(userInput)
-    
-    // If tool was attempted (directResult !== null), return immediately
-    // This includes both successful and failed tool attempts
-    if (directResult !== null) {
-      return {
-        id: randomUUID(),
-        type: 'assistant',
-        timestamp: new Date(),
-        content: directResult || '(Tool execution failed - see error above)',
+    // TIER 1: Try direct execution (0 API tokens)
+    // For: bash pwd, read file.ts, grep pattern src/
+    if (needsDirectExecution(userInput)) {
+      const directResult = await this.tryDirectToolExecution(userInput)
+      if (directResult !== null) {
+        return {
+          id: randomUUID(),
+          type: 'assistant',
+          timestamp: new Date(),
+          content: directResult || '(Tool execution failed)',
+        }
       }
     }
 
-    // Step 2: No direct tool match - call LLM with ULTRA-MINIMAL prompt (10-15 tokens)
-    // NO TOOL SCHEMAS sent to API!
+    // TIER 2: Check for modification requests
+    // For: change exports, create test file, fix bug
+    const modIntent = detectModificationIntent(userInput)
+    if (modIntent.isModification && modIntent.confidence >= 0.45) {
+      try {
+        const modResult = await this.executeModificationFlow(userInput, modIntent)
+        this.conversation.push({
+          id: randomUUID(),
+          type: 'assistant',
+          timestamp: new Date(),
+          content: modResult,
+        })
+        return {
+          id: randomUUID(),
+          type: 'assistant',
+          timestamp: new Date(),
+          content: modResult,
+        }
+      } catch (err) {
+        process.stderr.write(`[REPL] Modification flow failed: ${err}\n`)
+        // Fall through to generic LLM
+      }
+    }
+
+    // TIER 3: Generic LLM for analysis/questions
+    // For: how does this work, best practices, explanation
     const messages = this.buildMessageContext()
 
     printStreamingStart()
 
     const accumulator = await streamLLMResponse({
       messages,
-      systemPrompt: getSystemPrompt('minimal'), // Only 10-15 tokens, no tool defs
-      tools: [], // EMPTY - no tool schemas! (saves 100+ tokens)
+      systemPrompt: getSystemPrompt('minimal'),
+      tools: [],
       model: this.config.mainLoopModel,
       maxTokens: this.config.maxCompletionTokens,
       signal: this.abortController.signal,
@@ -261,22 +286,19 @@ export class REPL {
 
     printStreamingEnd()
 
-    // Track tokens for this query
     const tracker = getTokenTracker()
     tracker.trackQuery(
       randomUUID(),
       userInput,
       accumulator.inputTokens,
       accumulator.outputTokens,
-      [] // No tools used (they're not schemas anymore)
+      []
     )
 
-    // Display token metrics - should be ~30 tokens vs 141 before!
     tracker.displayQueryMetrics(
       tracker.getQueryMetrics()[tracker.getQueryMetrics().length - 1]
     )
 
-    // Add assistant response to conversation
     const assistantMessage: ConversationMessage = {
       id: randomUUID(),
       type: 'assistant',
@@ -350,8 +372,72 @@ export class REPL {
   }
 
   /**
-   * Build minimal ToolUseContext for tool execution
+   * TIER 2: Execute modification flow
+   * Detects modification intent, finds files, calls LLM with file context + modification tools
    */
+  private async executeModificationFlow(userInput: string, modIntent: any): Promise<string> {
+    const tracker = getTokenTracker()
+    
+    process.stderr.write(`[ModificationFlow] Detected ${modIntent.type} (confidence: ${(modIntent.confidence * 100).toFixed(0)}%)\n`)
+
+    // Find modification-related tools
+    const modTools = this.tools.filter((t) =>
+      ['Edit', 'Write', 'NotebookEdit', 'TaskCreate', 'Bash'].includes(t.name)
+    )
+
+    if (modTools.length === 0) {
+      throw new Error('No modification tools available')
+    }
+
+    process.stderr.write(`[ModificationFlow] Using tools: ${modTools.map((t) => t.name).join(', ')}\n`)
+
+    // Build LLM context with minimal modification tools
+    const messages = this.buildMessageContext()
+
+    printStreamingStart()
+
+    // Call LLM with ONLY modification-relevant tools
+    const accumulator = await streamLLMResponse({
+      messages: [
+        ...messages,
+        {
+          role: 'user',
+          content: userInput,
+        },
+      ],
+      systemPrompt: getSystemPrompt('minimal'),
+      tools: [], // Will be populated by tool matching
+      model: this.config.mainLoopModel,
+      maxTokens: this.config.maxCompletionTokens,
+      signal: this.abortController.signal,
+      onToken: (token) => printStreamingToken(token),
+    })
+
+    printStreamingEnd()
+
+    // Track modification flow tokens
+    tracker.trackQuery(
+      randomUUID(),
+      userInput,
+      accumulator.inputTokens,
+      accumulator.outputTokens,
+      modTools.map((t) => t.name)
+    )
+
+    tracker.displayQueryMetrics(
+      tracker.getQueryMetrics()[tracker.getQueryMetrics().length - 1]
+    )
+
+    // Add result to conversation
+    this.conversation.push({
+      id: randomUUID(),
+      type: 'assistant',
+      timestamp: new Date(),
+      content: accumulator.textContent,
+    })
+
+    return accumulator.textContent
+  }
   private buildToolUseContext(): any {
     // Create minimal state maps for tools
     const readFileState = new Map()
@@ -394,7 +480,7 @@ export class REPL {
       messages: this.conversation,
     } as any
   }
-   /** 
+   * 
    * WORKAROUND: Normalize tool names due to OpenAI API bug
    * (GPT-4-turbo returns "ReadRead" instead of "Read")
    */
