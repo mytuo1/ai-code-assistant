@@ -287,7 +287,34 @@ export class REPL {
 
     // TIER 3: Generic LLM for analysis/questions
     // For: how does this work, best practices, explanation
-    const messages = this.buildMessageContext()
+    let messages = this.buildMessageContext()
+    
+    // Check if query mentions any files - if so, provide file context
+    const filePattern = /\b([\w./-]*(?:package\.json|\.ts|\.js|\.json|\.md|\.yaml|\.yml|config|\.env|tsconfig|eslint|babel))\b/gi
+    const mentionedFiles = Array.from(new Set(
+      (userInput.match(filePattern) || []).map(f => f.trim()).filter(f => f.length > 0)
+    ))
+    
+    if (mentionedFiles.length > 0 && /what'?s?|show|check|read|display|find|get|contains|content|has|value|version|how/.test(userInput.toLowerCase())) {
+      try {
+        process.stderr.write(`[FileContext] Query mentions files: ${mentionedFiles.join(', ')}\n`)
+        const discoveredFiles = await discoverAffectedFiles(userInput, process.cwd(), { maxFiles: 5 })
+        
+        if (discoveredFiles.length > 0) {
+          process.stderr.write(`[FileContext] Discovered ${discoveredFiles.length} file(s)\n`)
+          const fileContext = formatFilesForLLMContext(discoveredFiles)
+          
+          // Enhance the last message with file context
+          const lastMessage = messages[messages.length - 1]
+          if (lastMessage && lastMessage.role === 'user') {
+            lastMessage.content = `${lastMessage.content}\n\n---\n\nFile context (actual content provided for your reference):\n${fileContext}`
+          }
+        }
+      } catch (err: any) {
+        process.stderr.write(`[FileContext] Failed to provide file context: ${err?.message}\n`)
+        // Continue without file context
+      }
+    }
 
     printStreamingStart()
 
