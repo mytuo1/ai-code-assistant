@@ -1,0 +1,33 @@
+{
+  "projectRoot": ".",
+  "scope": {
+    "include": [
+      "src/repl/**",
+      "src/tools/**",
+      "src/services/**",
+      "src/utils/**",
+      "src/types/**",
+      "package.json",
+      "tsconfig.json",
+      ".env*"
+    ],
+    "exclude": [
+      "src/components/**",
+      "src/entrypoints/**",
+      "src/main.tsx",
+      "src/QueryEngine.ts",
+      "src/providers/**",
+      "src/upstreamproxy/**",
+      "src/vim/**",
+      "src/voice/**",
+      "src/streaming/**",
+      "src/entrypoints/**",
+      "src/clients/**",
+      "node_modules/**",
+      ".git/**",
+      "dist/**",
+      "build/**"
+    ],
+    "allowedMaxSize": 52428800
+  }
+}

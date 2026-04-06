@@ -30,7 +30,7 @@ export async function executeTool(
 
   try {
     // Extract parameters from natural language
-    const params = extractToolParams(toolName, userQuery)
+    const params = extractToolParams(userQuery)
 
     // Log for debugging
     process.stderr.write(`[Tool] Executing ${toolName} with params: ${JSON.stringify(params)}\n`)
@@ -131,17 +131,24 @@ export async function tryDirectExecution(
   canUse: any
 ): Promise<ToolExecutionResult | null> {
   // Match tools to query
-  const matches = matchToolsForQuery(userQuery, availableTools)
+  const matches = matchToolsForQuery(userQuery)
 
   if (matches.length === 0 || matches[0].confidence < 0.3) {
     return null // No confident match, need LLM
   }
 
   const match = matches[0]
+  
+  // Find the actual tool object from availableTools
+  const toolObj = availableTools.find(t => t.name === match.toolName)
+  if (!toolObj) {
+    return null // Tool not found
+  }
+
   const result = await executeTool(
-    match.tool.name,
+    match.toolName,
     userQuery,
-    match.tool,
+    toolObj,
     context,
     canUse
   )
@@ -198,6 +205,6 @@ export function buildToolResultMessage(result: ToolExecutionResult): string {
     return `Tool ${result.toolName} failed: ${result.error}`
   }
 
-  const compressed = compressToolResultForHistory(result.output)
+  const compressed = compressToolResultForHistory(result)
   return `Tool ${result.toolName} executed successfully:\n\n${compressed}`
 }

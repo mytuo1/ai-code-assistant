@@ -39,9 +39,11 @@ import { REPL_PROJECT_SCOPE, isPathAllowed } from './project-scope.js'
 import { getSystemPrompt } from './system-prompt.js'
 import { ContextCache, compressToolOutput } from './context-cache.js'
 import { getTokenTracker } from './token-tracker.js'
-import { matchToolsForQuery, needsDirectExecution, needsLLMInterpretation, getExecutionTier } from './tool-router.js'
+import { matchToolsForQuery, needsDirectExecution, needsLLMInterpretation, isModificationQuery, getPrimaryToolMatch } from './tool-router.js'
 import { tryDirectExecution, formatToolResult, buildToolResultMessage } from './tool-executor.js'
-import { detectModificationIntent } from './modification-intent.js'
+import { detectModificationIntent } from './modification-detection.js'
+import { discoverAffectedFiles, validateDiscoveredFileScope, formatFilesForLLMContext } from './file-discovery.js'
+import { executeModifications, getModificationSystemPrompt, summarizeModifications, validateModificationToolCall } from './modification-executor.js'
 
 export interface ConversationMessage {
   id: string
@@ -247,8 +249,20 @@ export class REPL {
     // TIER 2: Check for modification requests
     // For: change exports, create test file, fix bug
     const modIntent = detectModificationIntent(userInput)
-    if (modIntent.isModification && modIntent.confidence >= 0.45) {
+    
+    // DEBUG: Log modification detection
+    if (process.env.DEBUG_MODIFICATIONS || process.env.DEBUG) {
+      process.stderr.write(`[ModDetect] Query: "${userInput}"\n`)
+      process.stderr.write(`[ModDetect] isModification: ${modIntent.isModification}\n`)
+      process.stderr.write(`[ModDetect] confidence: ${modIntent.confidence}\n`)
+      process.stderr.write(`[ModDetect] type: ${modIntent.type}\n`)
+    }
+    
+    // Use 0.40 threshold instead of 0.45 to avoid floating point rounding errors
+    // (0.449999999... is still a valid modification signal)
+    if (modIntent.isModification && modIntent.confidence >= 0.40) {
       try {
+        process.stderr.write(`[REPL] ✓ Detected modification intent (${modIntent.type}, confidence: ${(modIntent.confidence * 100).toFixed(0)}%)\n`)
         const modResult = await this.executeModificationFlow(userInput, modIntent)
         this.conversation.push({
           id: randomUUID(),
@@ -262,10 +276,13 @@ export class REPL {
           timestamp: new Date(),
           content: modResult,
         }
-      } catch (err) {
-        process.stderr.write(`[REPL] Modification flow failed: ${err}\n`)
+      } catch (err: any) {
+        process.stderr.write(`[REPL] ✗ Modification flow failed: ${err?.message || err}\n`)
+        process.stderr.write(`[REPL] Falling back to generic LLM\n`)
         // Fall through to generic LLM
       }
+    } else if (modIntent.confidence > 0) {
+      process.stderr.write(`[REPL] Modification detected but confidence too low (${(modIntent.confidence * 100).toFixed(1)}% < 40%)\n`)
     }
 
     // TIER 3: Generic LLM for analysis/questions
@@ -380,38 +397,101 @@ export class REPL {
     
     process.stderr.write(`[ModificationFlow] Detected ${modIntent.type} (confidence: ${(modIntent.confidence * 100).toFixed(0)}%)\n`)
 
-    // Find modification-related tools
-    const modTools = this.tools.filter((t) =>
-      ['Edit', 'Write', 'NotebookEdit', 'TaskCreate', 'Bash'].includes(t.name)
-    )
-
-    if (modTools.length === 0) {
-      throw new Error('No modification tools available')
+    // Step 1: Discover affected files (0 tokens - direct execution)
+    let discoveredFiles: any[] = []
+    try {
+      process.stderr.write(`[ModificationFlow] Discovering affected files...\n`)
+      discoveredFiles = await discoverAffectedFiles(
+        userInput,
+        this.cwd,
+        this.buildToolUseContext(),
+        {
+          maxFiles: 5,
+          maxFileSize: 50 * 1024, // 50KB
+          patterns: modIntent.affectedPatterns,
+        }
+      )
+      process.stderr.write(`[ModificationFlow] Discovered ${discoveredFiles.length} file(s)\n`)
+    } catch (err: any) {
+      throw new Error(`File discovery failed: ${err?.message || err}`)
     }
 
-    process.stderr.write(`[ModificationFlow] Using tools: ${modTools.map((t) => t.name).join(', ')}\n`)
+    // Step 2: Validate files are in allowed scope
+    let validatedFiles: any[] = []
+    try {
+      process.stderr.write(`[ModificationFlow] Validating file scope...\n`)
+      validatedFiles = validateDiscoveredFileScope(
+        discoveredFiles,
+        (path) => this.validateFileAccess(path)
+      )
+      process.stderr.write(`[ModificationFlow] Validated ${validatedFiles.length} file(s)\n`)
+    } catch (err: any) {
+      throw new Error(`File validation failed: ${err?.message || err}`)
+    }
 
-    // Build LLM context with minimal modification tools
-    const messages = this.buildMessageContext()
+    if (validatedFiles.length === 0) {
+      throw new Error('Discovered files are outside allowed project scope.')
+    }
+
+    process.stderr.write(
+      `[ModificationFlow] Files ready for modification: ${validatedFiles.map((f: any) => f.path || f).join(', ')}\n`
+    )
+
+    // Step 3: Build message with file context for LLM
+    let fileContextText: string = ''
+    try {
+      process.stderr.write(`[ModificationFlow] Building file context for LLM...\n`)
+      fileContextText = formatFilesForLLMContext(validatedFiles)
+      process.stderr.write(`[ModificationFlow] File context prepared (${fileContextText.length} chars)\n`)
+      if (process.env.DEBUG_MODIFICATIONS) {
+        process.stderr.write(`[ModificationFlow] File context:\n${fileContextText}\n`)
+      }
+    } catch (err: any) {
+      process.stderr.write(`[ModificationFlow] Warning: Failed to format file context: ${err?.message || err}\n`)
+      // Continue anyway, try without context
+      fileContextText = validatedFiles
+        .map((f: any) => `File: ${f.path || f}\n${f.content || '(no content)'}`)
+        .join('\n---\n')
+    }
+
+    let messages: any[] = []
+    try {
+      process.stderr.write(`[ModificationFlow] Building message context...\n`)
+      messages = [
+        ...this.buildMessageContext(),
+        {
+          role: 'user' as const,
+          content: `${fileContextText}\n\nUser request: ${userInput}`,
+        },
+      ]
+      process.stderr.write(`[ModificationFlow] Message context built (${messages.length} messages)\n`)
+    } catch (err: any) {
+      throw new Error(`Message context build failed: ${err?.message || err}`)
+    }
 
     printStreamingStart()
 
-    // Call LLM with ONLY modification-relevant tools
-    const accumulator = await streamLLMResponse({
-      messages: [
-        ...messages,
-        {
-          role: 'user',
-          content: userInput,
-        },
-      ],
-      systemPrompt: getSystemPrompt('minimal'),
-      tools: [], // Will be populated by tool matching
-      model: this.config.mainLoopModel,
-      maxTokens: this.config.maxCompletionTokens,
-      signal: this.abortController.signal,
-      onToken: (token) => printStreamingToken(token),
-    })
+    let accumulator: any = null
+    try {
+      process.stderr.write(`[ModificationFlow] Calling LLM with modification schemas...\n`)
+      
+      // Step 4: Call LLM with file context (no tool schemas - LLM will respond as text)
+      // We'll parse tool calls from the natural text response instead
+      accumulator = await streamLLMResponse({
+        messages,
+        systemPrompt: getSystemPrompt('modification'),
+        tools: [],  // Empty array - LLM will use natural format
+        model: this.config.mainLoopModel,
+        maxTokens: this.config.maxCompletionTokens,
+        signal: this.abortController.signal,
+        onToken: (token) => printStreamingToken(token),
+      })
+      
+      process.stderr.write(`[ModificationFlow] LLM response received (${accumulator?.textContent?.length || 0} chars)\n`)
+    } catch (err: any) {
+      printStreamingEnd()
+      throw new Error(`LLM call failed: ${err?.message || err}`)
+    }
 
     printStreamingEnd()
 
@@ -421,22 +501,279 @@ export class REPL {
       userInput,
       accumulator.inputTokens,
       accumulator.outputTokens,
-      modTools.map((t) => t.name)
+      ['str_replace', 'create_file', 'append_file']
     )
 
     tracker.displayQueryMetrics(
       tracker.getQueryMetrics()[tracker.getQueryMetrics().length - 1]
     )
 
+    // Step 5: Extract tool calls from LLM response
+    let toolCalls: any[] = []
+    try {
+      process.stderr.write(`[ModificationFlow] Extracting tool calls from LLM response...\n`)
+      toolCalls = this.extractToolCallsFromResponse(accumulator.textContent)
+      process.stderr.write(`[ModificationFlow] Extracted ${toolCalls.length} tool call(s)\n`)
+    } catch (err: any) {
+      process.stderr.write(`[ModificationFlow] Warning: Failed to extract tool calls: ${err?.message || err}\n`)
+      // Continue - might be text-only response
+    }
+
+    if (toolCalls.length === 0) {
+      // LLM just returned text explanation, no modifications
+      process.stderr.write(`[ModificationFlow] No tool calls found, returning text response\n`)
+      return accumulator.textContent
+    }
+
+    // Step 6: Validate and execute tool calls
+    const results: string[] = []
+
+    for (const toolCall of toolCalls) {
+      try {
+        process.stderr.write(`[ModificationFlow] Processing tool call: ${toolCall.name}\n`)
+        
+        // Validate before executing
+        const validation = await validateModificationToolCall(
+          toolCall,
+          (path) => this.validateFileAccess(path),
+          {
+            exists: (path) => this.fileExists(path),
+          }
+        )
+
+        if (!validation.valid) {
+          process.stderr.write(`[ModificationFlow] ✗ Validation failed: ${validation.reason}\n`)
+          results.push(`✗ ${toolCall.name}: ${validation.reason}`)
+          continue
+        }
+
+        // Execute tool call
+        const result = await this.executeModificationToolCall(toolCall)
+        results.push(result)
+
+        process.stderr.write(
+          `[ModificationFlow] ✓ Executed ${toolCall.name}\n`
+        )
+      } catch (err: any) {
+        process.stderr.write(`[ModificationFlow] ✗ Tool call execution failed: ${err?.message || err}\n`)
+        results.push(`✗ ${toolCall.name}: ${err?.message || err}`)
+      }
+    }
+
+    // Build response
+    const output = [
+      accumulator.textContent,
+      '',
+      '## Changes Applied:',
+      ...results,
+    ].join('\n')
+
     // Add result to conversation
     this.conversation.push({
       id: randomUUID(),
       type: 'assistant',
       timestamp: new Date(),
-      content: accumulator.textContent,
+      content: output,
     })
 
-    return accumulator.textContent
+    return output
+  }
+
+  /**
+   * Extract tool calls from LLM response (XML format)
+   */
+  private extractToolCallsFromResponse(response: string): any[] {
+    const toolCalls: any[] = []
+    
+    // Parse XML tool_use blocks from Claude API response
+    const regex = /<tool_use id="([^"]+)" name="([^"]+)">[\s\S]*?<input>([\s\S]*?)<\/input>[\s\S]*?<\/tool_use>/g
+    let match
+
+    while ((match = regex.exec(response)) !== null) {
+      const [, id, name, inputStr] = match
+      try {
+        // Try to parse JSON, with fallback to fixing common mistakes
+        let input: any
+        try {
+          input = JSON.parse(inputStr)
+        } catch (parseErr) {
+          // Try to fix common Claude mistakes
+          let fixed = inputStr.trim()
+          
+          // Fix 1: Missing closing quote before } or ]
+          // Pattern: "field": "value} → "field": "value"}
+          // Find any character that's not a quote before } and add the quote
+          fixed = fixed.replace(/([^"\\])([\s\n]*[}\]])/g, '$1"$2')
+          
+          // Fix 2: Remove trailing garbage after }
+          if (!fixed.endsWith('}')) {
+            const lastBrace = fixed.lastIndexOf('}')
+            if (lastBrace > 0) {
+              fixed = fixed.substring(0, lastBrace + 1)
+            }
+          }
+          
+          // Fix 3: Balance braces
+          const openBraces = (fixed.match(/{/g) || []).length
+          const closeBraces = (fixed.match(/}/g) || []).length
+          if (openBraces > closeBraces) {
+            fixed += '}'.repeat(openBraces - closeBraces)
+          }
+          
+          // Try again with fixed string
+          input = JSON.parse(fixed)
+        }
+        
+        toolCalls.push({
+          id,
+          name: name as 'str_replace' | 'create_file' | 'append_file',
+          input,
+        })
+      } catch (err) {
+        process.stderr.write(`[REPL] Failed to parse tool input: ${err}\n`)
+        if (process.env.DEBUG_MODIFICATIONS) {
+          process.stderr.write(`[REPL] Raw input: ${inputStr}\n`)
+        }
+      }
+    }
+
+    return toolCalls
+  }
+
+  /**
+   * Execute a modification tool call using the actual tools
+   */
+  private async executeModificationToolCall(toolCall: any): Promise<string> {
+    const { name, input } = toolCall
+
+    try {
+      switch (name) {
+        case 'str_replace': {
+          process.stderr.write(`[ModificationFlow] Executing str_replace via FileEditTool: ${input.path}\n`)
+          
+          const tool = this.tools.find((t) => t.name === 'Edit' || t.name === 'FileEditTool')
+          if (!tool) {
+            return `✗ FileEditTool not found in available tools`
+          }
+
+          try {
+            // Create parentMessage with required uuid property
+            const parentMessage = {
+              uuid: randomUUID(),
+              role: 'assistant' as const,
+              content: [],
+            }
+
+            await tool.call(
+              {
+                file_path: input.path,
+                old_string: input.old_str,
+                new_string: input.new_str,
+              },
+              this.buildToolUseContext(),
+              async () => ({ behavior: 'allow' as const }),
+              parentMessage
+            )
+            return `✓ Modified ${input.path}`
+          } catch (toolErr: any) {
+            process.stderr.write(`[ModificationFlow] Tool error: ${toolErr?.message || toolErr}\n`)
+            return `✗ Failed to modify ${input.path}: ${toolErr?.message || toolErr}`
+          }
+        }
+
+        case 'create_file': {
+          process.stderr.write(`[ModificationFlow] Executing create_file via FileWriteTool: ${input.path}\n`)
+          
+          const tool = this.tools.find((t) => t.name === 'Write' || t.name === 'FileWriteTool')
+          if (!tool) {
+            return `✗ FileWriteTool not found in available tools`
+          }
+
+          try {
+            const parentMessage = {
+              uuid: randomUUID(),
+              role: 'assistant' as const,
+              content: [],
+            }
+
+            await tool.call(
+              {
+                file_path: input.path,
+                content: input.contents,
+              },
+              this.buildToolUseContext(),
+              async () => ({ behavior: 'allow' as const }),
+              parentMessage
+            )
+            return `✓ Created ${input.path}`
+          } catch (toolErr: any) {
+            process.stderr.write(`[ModificationFlow] Tool error: ${toolErr?.message || toolErr}\n`)
+            return `✗ Failed to create ${input.path}: ${toolErr?.message || toolErr}`
+          }
+        }
+
+        case 'append_file': {
+          process.stderr.write(`[ModificationFlow] Executing append_file via FileWriteTool: ${input.path}\n`)
+          
+          const tool = this.tools.find((t) => t.name === 'Write' || t.name === 'FileWriteTool')
+          if (!tool) {
+            return `✗ FileWriteTool not found in available tools`
+          }
+
+          try {
+            const parentMessage = {
+              uuid: randomUUID(),
+              role: 'assistant' as const,
+              content: [],
+            }
+
+            // For append, read existing content and append
+            const { readFileSync } = await import('fs')
+            let existingContent = ''
+            try {
+              existingContent = readFileSync(input.path, 'utf-8')
+            } catch {
+              // File doesn't exist, that's fine
+            }
+
+            const newContent = existingContent + input.text
+
+            await tool.call(
+              {
+                file_path: input.path,
+                content: newContent,
+              },
+              this.buildToolUseContext(),
+              async () => ({ behavior: 'allow' as const }),
+              parentMessage
+            )
+            return `✓ Appended to ${input.path}`
+          } catch (toolErr: any) {
+            process.stderr.write(`[ModificationFlow] Tool error: ${toolErr?.message || toolErr}\n`)
+            return `✗ Failed to append to ${input.path}: ${toolErr?.message || toolErr}`
+          }
+        }
+
+        default:
+          return `✗ Unknown modification tool: ${name}`
+      }
+    } catch (err: any) {
+      process.stderr.write(`[ModificationFlow] Unexpected error: ${err?.message || err}\n`)
+      return `✗ Modification failed: ${err?.message || err}`
+    }
+  }
+
+  /**
+   * Check if file exists
+   */
+  private async fileExists(path: string): Promise<boolean> {
+    try {
+      const { promises: fs } = await import('fs')
+      await fs.stat(path)
+      return true
+    } catch {
+      return false
+    }
   }
   private buildToolUseContext(): any {
     // Create minimal state maps for tools
@@ -444,7 +781,7 @@ export class REPL {
     let fileHistoryState = { fileWrites: new Map(), edits: [] }
     let attributionState = { items: [] }
 
-    // Build context object with required fields
+    // Build context object with required fields for FileEditTool and other tools
     return {
       options: {
         commands: [],
@@ -464,6 +801,10 @@ export class REPL {
       abortController: this.abortController,
       readFileState,
       
+      // FileEditTool requires these
+      userModified: new Map(),  // Track user modifications
+      dynamicSkillDirTriggers: new Set(),  // For skill discovery
+      
       // Minimal state getters/setters (stubs for REPL)
       getAppState: () => ({} as any),
       setAppState: (f: any) => {},
@@ -480,7 +821,8 @@ export class REPL {
       messages: this.conversation,
     } as any
   }
-   * 
+
+  /**
    * WORKAROUND: Normalize tool names due to OpenAI API bug
    * (GPT-4-turbo returns "ReadRead" instead of "Read")
    */
