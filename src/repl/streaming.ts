@@ -25,6 +25,7 @@ export async function streamLLMResponse({
   tools,
   model,
   signal,
+  maxTokens = 4096,
   onToken,
   onToolDetected,
 }: {
@@ -33,10 +34,10 @@ export async function streamLLMResponse({
   tools: Tools
   model: string
   signal: AbortSignal
+  maxTokens?: number
   onToken?: (token: string) => void
   onToolDetected?: (toolName: string) => void
 }): Promise<StreamingResponseAccumulator> {
-  
   const accumulator: StreamingResponseAccumulator = {
     textContent: '',
     toolCalls: [],
@@ -53,10 +54,12 @@ export async function streamLLMResponse({
       signal,
       options: {
         model,
-        maxTokens: 8000,
+        maxTokens,
       },
       thinkingConfig: { type: 'disabled' },
     })
+
+
 
     for await (const event of stream) {
       if (event.type === 'text_delta') {
@@ -76,12 +79,13 @@ export async function streamLLMResponse({
             // Only include text we haven't already accumulated
             accumulator.textContent = block.text
           } else if (block.type === 'tool_use') {
+            const toolName = block.name ?? ''
             accumulator.toolCalls.push({
               id: block.id ?? '',
-              name: block.name ?? '',
+              name: toolName,
               input: block.input ?? {},
             })
-            onToolDetected?.(block.name ?? '')
+            onToolDetected?.(toolName)
           }
         }
       } else if (event.type === 'system') {
@@ -116,7 +120,7 @@ export function printStreamingEnd(): void {
 }
 
 export function printToolDetected(toolName: string): void {
-  process.stderr.write(`[DEBUG] Tool detected: ${toolName}\n`)
+  // Removed debug output
 }
 
 /**

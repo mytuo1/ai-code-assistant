@@ -12,6 +12,7 @@ export class SandboxManager {
   static isSandboxRequired(): boolean { return false }
   static isSandboxingEnabled(): boolean { return false }
   static initialize(_callback: unknown): Promise<void> { return Promise.resolve() }
+  static annotateStderrWithSandboxFailures(command: string, output: string): string { return output }
   isEnabled(): boolean { return false }
   async init(): Promise<void> {}
   async cleanup(): Promise<void> {}

@@ -9,8 +9,9 @@ apiKey: "${OPENAI_API_KEY}"           # Resolves from env var
 # apiBaseUrl: "https://api.openai.com" # Override if using proxy
 
 # Model selection
-mainLoopModel: "gpt-4o"          # Primary reasoning model
+mainLoopModel: "gpt-3.5-turbo"          # Primary reasoning model
 smallFastModel: "gpt-4-mini"          # For quick operations
+maxCompletionTokens: 4096             # Max tokens for response (model-specific)
 contextWindowSize: 128000             # Max tokens for this model
 
 # System prompt (default is generic, can override here)
@@ -27,10 +28,15 @@ systemPrompt: |
 # Tool configuration
 tools:
   enabled:
-    - "file_read"                   # Read files
-    - "file_write"                  # Write files
-    - "bash"                        # Shell commands
-    - "mcp"                         # MCP servers
+    - "Bash"                       # Execute shell commands
+    - "Read"                       # Read files
+    - "Write"                      # Write files
+    - "WebSearch"                  # Search the web
+    - "WebFetch"                   # Fetch web pages
+    # - "Edit"                     # Edit files
+    # - "NotebookEdit"             # Edit notebooks
+    # - "ListMcpResourcesTool"     # List MCP resources
+    # - "ReadMcpResourceTool"      # Read MCP resources
     # - "computer_use"              # Screenshot + interact (if supported)
 
   # Scope file operations to project directory or unrestricted

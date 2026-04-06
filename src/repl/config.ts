@@ -16,6 +16,7 @@ export interface REPLConfig {
   // Model selection
   mainLoopModel: string
   smallFastModel: string
+  maxCompletionTokens: number
   contextWindowSize: number
 
   // System prompt
@@ -65,8 +66,9 @@ const DEFAULT_CONFIG: REPLConfig = {
   apiKey: process.env.OPENAI_API_KEY || '',
   apiBaseUrl: process.env.OPENAI_BASE_URL,
 
-  mainLoopModel: 'gpt-4-turbo',
+  mainLoopModel: 'gpt-3.5-turbo',
   smallFastModel: 'gpt-4-mini',
+  maxCompletionTokens: 4096,
   contextWindowSize: 128000,
 
   systemPrompt: `You are a helpful code assistant. You have access to tools to:
@@ -75,10 +77,14 @@ const DEFAULT_CONFIG: REPLConfig = {
 - Access external services via MCP servers
 - Take screenshots and interact with the UI (if enabled)
 
+Your current working directory is: ${process.cwd()}
+
+When using the Read tool to access files, use relative paths from the current directory (e.g., "package.json"), not absolute paths like "/mnt/data/".
+
 When the user asks you to do something, use these tools as needed. Ask for confirmation before making destructive changes.`,
 
   tools: {
-    enabled: ['file_read', 'file_write', 'bash', 'mcp'],
+    enabled: ['Bash', 'Read', 'Write', 'WebSearch', 'WebFetch'],
     fileOpsScope: 'project',
     workingDirectory: '.',
     computerUseEnabled: false,
