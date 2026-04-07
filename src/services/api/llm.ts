@@ -57,6 +57,7 @@ function isReasoningModel(model: string): boolean {
     m.startsWith('o1') ||
     m.startsWith('o3') ||
     m.startsWith('o4') ||
+    m.startsWith('gpt-5.4') ||
     m.includes('reasoning') ||
     isEnvTruthy(process.env.MODEL_IS_REASONING)
   )

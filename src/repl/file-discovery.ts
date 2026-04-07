@@ -420,3 +420,54 @@ export function formatFilesForLLMContext(files: DiscoveredFile[]): string {
 
   return result
 }
+
+/**
+ * Format files for READ-ONLY queries (not modifications)
+ * Extracts key values from JSON files to prevent Claude hallucination
+ */
+export function formatFilesForReadingContext(files: DiscoveredFile[]): string {
+  let result = ''
+
+  files.sort((a, b) => b.priority - a.priority)
+
+  for (const file of files) {
+    const displayPath = file.path.startsWith('/') ? file.path : `./${file.path}`
+    result += `\n📄 FILE: ${displayPath}\n`
+    result += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
+
+    if (!file.content) {
+      result += '[Could not read file]\n'
+      continue
+    }
+
+    // For JSON files, extract key fields
+    if (displayPath.endsWith('.json')) {
+      try {
+        const parsed = JSON.parse(file.content)
+        const importantKeys = ['name', 'version', 'main', 'description', 'type', 'author', 'license']
+        
+        for (const key of importantKeys) {
+          if (key in parsed) {
+            const value = parsed[key]
+            result += `${key}: ${JSON.stringify(value)}\n`
+          }
+        }
+        
+        // Also show any other top-level keys
+        for (const key in parsed) {
+          if (!importantKeys.includes(key) && typeof parsed[key] !== 'object') {
+            result += `${key}: ${JSON.stringify(parsed[key])}\n`
+          }
+        }
+      } catch (e) {
+        // If not valid JSON, show raw content
+        result += file.content + '\n'
+      }
+    } else {
+      // For non-JSON files, show full content
+      result += file.content + '\n'
+    }
+  }
+
+  return result
+}

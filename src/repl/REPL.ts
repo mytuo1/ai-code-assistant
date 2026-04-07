@@ -44,6 +44,14 @@ import { tryDirectExecution, formatToolResult, buildToolResultMessage } from './
 import { detectModificationIntent } from './modification-detection.js'
 import { discoverAffectedFiles, validateDiscoveredFileScope, formatFilesForLLMContext } from './file-discovery.js'
 import { executeModifications, getModificationSystemPrompt, summarizeModifications, validateModificationToolCall } from './modification-executor.js'
+import { detectDebugIntent, extractCommand } from './debug-detection.js'
+import { captureError, buildDebugContext } from './error-capture.js'
+import { selectModelForQuery, formatModelSelection } from './model-selector.js'
+import { analyzeQueryComplexity } from './query-complexity.js'
+import { SessionFileCache, formatCachedFilesForContext } from './session-file-cache.js'
+
+// Global session file cache instance
+const fileCache = new SessionFileCache()
 
 export interface ConversationMessage {
   id: string
@@ -74,6 +82,7 @@ export class REPL {
   private prompt: any = null  // Readline interface for REPL loop
   private contextCache: ContextCache = new ContextCache()  // Cache for large content
   private sessionStartTime: Date = new Date()  // Track session start
+  private fileCache: SessionFileCache = new SessionFileCache()  // Session file memory
 
   constructor(config: REPLConfig, cwd: string = process.cwd()) {
     this.config = config
@@ -246,7 +255,33 @@ export class REPL {
       }
     }
 
-    // TIER 2: Check for modification requests
+    // TIER 2: Check for debug/fix requests
+    // For: "something's not working", "fix this error", etc.
+    const debugIntent = detectDebugIntent(userInput)
+    
+    if (debugIntent.isDebug && debugIntent.confidence >= 0.5) {
+      try {
+        process.stderr.write(`[DebugDetect] Debug request detected (confidence: ${(debugIntent.confidence * 100).toFixed(0)}%)\n`)
+        const debugResult = await this.executeDebugFlow(userInput, debugIntent)
+        this.conversation.push({
+          id: randomUUID(),
+          type: 'assistant',
+          timestamp: new Date(),
+          content: debugResult,
+        })
+        return {
+          id: randomUUID(),
+          type: 'assistant',
+          timestamp: new Date(),
+          content: debugResult,
+        }
+      } catch (err: any) {
+        process.stderr.write(`[REPL] ✗ Debug flow failed: ${err?.message || err}\n`)
+        process.stderr.write(`[REPL] Falling back to generic LLM\n`)
+      }
+    }
+
+    // TIER 2B: Check for modification requests
     // For: change exports, create test file, fix bug
     const modIntent = detectModificationIntent(userInput)
     
@@ -285,34 +320,118 @@ export class REPL {
       process.stderr.write(`[REPL] Modification detected but confidence too low (${(modIntent.confidence * 100).toFixed(1)}% < 40%)\n`)
     }
 
-    // TIER 3: Generic LLM for analysis/questions
-    // For: how does this work, best practices, explanation
-    let messages = this.buildMessageContext()
+    // SELECT MODEL BASED ON QUERY COMPLEXITY
+    // Uses intelligent routing: Tier 1 (direct), Tier 2 (nano), Tier 3-Light (nano), Tier 3-Heavy (mini)
+    const isModification = modIntent && modIntent.isModification && modIntent.confidence >= 0.40
     
-    // Check if query mentions any files - if so, provide file context
-    const filePattern = /\b([\w./-]*(?:package\.json|\.ts|\.js|\.json|\.md|\.yaml|\.yml|config|\.env|tsconfig|eslint|babel))\b/gi
+    const modelSelection = selectModelForQuery(userInput, isModification)
+    
+    if (process.env.DEBUG_MODIFICATIONS || process.env.DEBUG) {
+      process.stderr.write(formatModelSelection(modelSelection) + '\n')
+    }
+
+    // TIER 1: Direct execution (no model needed)
+    if (modelSelection.tier === 'tier1') {
+      process.stderr.write(`[Tier1] Attempting direct file reading...\n`)
+      
+      const filePattern = /\b([\w./-]*(?:package\.json|\.ts|\.js|\.json|\.md|\.yaml|\.yml|config|\.env|tsconfig|eslint|babel|system-prompt))\b/gi
+      const mentionedFiles = Array.from(new Set(
+        (userInput.match(filePattern) || []).map(f => f.trim()).filter(f => f.length > 0)
+      ))
+      
+      try {
+        let directAnswer = ''
+        
+        for (const file of mentionedFiles) {
+          const resolvedPath = file.startsWith('/') ? file : join(this.cwd, file)
+          
+          if (existsSync(resolvedPath)) {
+            const content = readFileSync(resolvedPath, 'utf-8')
+            
+            // Add to session cache for future use in this session
+            fileCache.addFile(resolvedPath, content)
+            process.stderr.write(`[SessionCache] Cached ${file} for future queries\n`)
+            
+            if (file.includes('package.json') && /version|name|description|author|license|type|main/.test(userInput.toLowerCase())) {
+              try {
+                const json = JSON.parse(content)
+                const requested = userInput.match(/version|name|description|author|license|type|main/i)?.[0]?.toLowerCase()
+                
+                if (requested && requested in json) {
+                  directAnswer += `The ${requested} is ${JSON.stringify(json[requested])}\n`
+                  process.stderr.write(`[Tier1] ✓ Extracted ${requested} from ${file}\n`)
+                }
+              } catch (e) {
+                process.stderr.write(`[Tier1] Could not parse JSON\n`)
+              }
+            }
+          }
+        }
+        
+        if (directAnswer) {
+          process.stderr.write(`[Tier1] ✓ Answered directly without model\n`)
+          process.stderr.write(`[Tier1] Response content: "${directAnswer}"\n`)
+          printStreamingStart()
+          process.stdout.write(directAnswer)
+          printStreamingEnd()
+          
+          const tracker = getTokenTracker()
+          tracker.trackQuery(randomUUID(), userInput, 0, 0, ['tier1-direct'])
+          
+          const assistantMessage: ConversationMessage = {
+            id: randomUUID(),
+            type: 'assistant',
+            timestamp: new Date(),
+            content: directAnswer,
+          }
+          
+          this.conversation.push(assistantMessage)
+          return assistantMessage
+        }
+      } catch (err: any) {
+        process.stderr.write(`[Tier1] Direct read failed, falling back to reasoning model\n`)
+      }
+    }
+
+    // TIER 2, 3-LIGHT, 3-HEAVY: Use reasoning models
+    let messages = this.buildMessageContext()
+    let fileReadingTools: any[] = []
+    
+    // Check if query mentions files - provide FileReadTool
+    const filePattern = /\b([\w./-]*(?:package\.json|\.ts|\.js|\.json|\.md|\.yaml|\.yml|config|\.env|tsconfig|eslint|babel|system-prompt))\b/gi
     const mentionedFiles = Array.from(new Set(
       (userInput.match(filePattern) || []).map(f => f.trim()).filter(f => f.length > 0)
     ))
     
-    if (mentionedFiles.length > 0 && /what'?s?|show|check|read|display|find|get|contains|content|has|value|version|how/.test(userInput.toLowerCase())) {
-      try {
-        process.stderr.write(`[FileContext] Query mentions files: ${mentionedFiles.join(', ')}\n`)
-        const discoveredFiles = await discoverAffectedFiles(userInput, process.cwd(), { maxFiles: 5 })
+    if (mentionedFiles.length > 0 || /file|code|system|config/.test(userInput.toLowerCase())) {
+      fileReadingTools = [FileReadTool]
+      
+      // Include cached files in context so Claude remembers them from this session
+      const cachedFilesContext = formatCachedFilesForContext(fileCache, 
+        mentionedFiles.map(f => f.startsWith('/') ? f : join(this.cwd, f))
+      )
+      
+      const lastMessage = messages[messages.length - 1]
+      if (lastMessage && lastMessage.type === 'user') {
+        let contextMsg = `${lastMessage.content}`
         
-        if (discoveredFiles.length > 0) {
-          process.stderr.write(`[FileContext] Discovered ${discoveredFiles.length} file(s)\n`)
-          const fileContext = formatFilesForLLMContext(discoveredFiles)
-          
-          // Enhance the last message with file context
-          const lastMessage = messages[messages.length - 1]
-          if (lastMessage && lastMessage.role === 'user') {
-            lastMessage.content = `${lastMessage.content}\n\n---\n\nFile context (actual content provided for your reference):\n${fileContext}`
-          }
+        // Add cached files to context if available
+        if (cachedFilesContext) {
+          contextMsg += `\n\n${cachedFilesContext}`
         }
-      } catch (err: any) {
-        process.stderr.write(`[FileContext] Failed to provide file context: ${err?.message}\n`)
-        // Continue without file context
+        
+        contextMsg += `\n\n[FileReadTool is available to read additional files if needed.]`
+        lastMessage.content = contextMsg
+      }
+    }
+    
+    // Determine which model and how to log
+    let modelIdToUse = modelSelection.modelId
+    
+    if (process.env.DEBUG_MODIFICATIONS || process.env.DEBUG) {
+      process.stderr.write(`[Tier${modelSelection.tier.slice(-1)}] Using ${modelSelection.model?.name || 'direct execution'}\n`)
+      if (modelSelection.complexity) {
+        process.stderr.write(`[Tier${modelSelection.tier.slice(-1)}] Complexity: ${modelSelection.complexity} (reasoning budget: ${modelSelection.thinkingBudget})\n`)
       }
     }
 
@@ -321,15 +440,17 @@ export class REPL {
     const accumulator = await streamLLMResponse({
       messages,
       systemPrompt: getSystemPrompt('minimal'),
-      tools: [],
-      model: this.config.mainLoopModel,
-      maxTokens: this.config.maxCompletionTokens,
+      tools: fileReadingTools,
+      model: modelIdToUse,
+      maxTokens: modelSelection.maxTokens,
       signal: this.abortController.signal,
       onToken: (token) => printStreamingToken(token),
     })
 
     printStreamingEnd()
 
+    const response = accumulator.output
+    
     const tracker = getTokenTracker()
     tracker.trackQuery(
       randomUUID(),
@@ -347,7 +468,7 @@ export class REPL {
       id: randomUUID(),
       type: 'assistant',
       timestamp: new Date(),
-      content: accumulator.textContent,
+      content: response,
     }
 
     this.conversation.push(assistantMessage)
@@ -416,7 +537,113 @@ export class REPL {
   }
 
   /**
-   * TIER 2: Execute modification flow
+   * TIER 2: Execute debug flow
+   * Captures error from running command, analyzes code, generates and applies fixes
+   */
+  private async executeDebugFlow(userInput: string, debugIntent: any): Promise<string> {
+    process.stderr.write(`[DebugFlow] Starting debug flow\n`)
+    const { formatFilesForReadingContext } = await import('./file-discovery.js')
+
+    // Step 1: Try to run the command and capture error
+    let errorOutput
+    if (debugIntent.command) {
+      process.stderr.write(`[DebugFlow] Running command: ${debugIntent.command}\n`)
+      errorOutput = captureError(debugIntent.command, this.cwd)
+    } else if (debugIntent.errorMessage) {
+      process.stderr.write(`[DebugFlow] Using provided error message\n`)
+      errorOutput = {
+        success: false,
+        stdout: '',
+        stderr: debugIntent.errorMessage,
+        exitCode: 1,
+        combinedOutput: debugIntent.errorMessage,
+      }
+    } else {
+      return '⚠️  Could not determine what to debug. Please provide an error message or command to run.'
+    }
+
+    // Step 2: Discover affected files to understand the codebase
+    let affectedFiles: any[] = []
+    try {
+      process.stderr.write(`[DebugFlow] Discovering code files for context...\n`)
+      affectedFiles = await discoverAffectedFiles(userInput, this.cwd, { maxFiles: 3 })
+    } catch (err: any) {
+      process.stderr.write(`[DebugFlow] Warning: Could not discover files: ${err?.message}\n`)
+    }
+
+    // Step 3: Build debug context with code + error
+    let debugContext = ''
+    if (affectedFiles.length > 0) {
+      debugContext = buildDebugContext(affectedFiles[0].content || '', errorOutput, userInput)
+    } else {
+      debugContext = buildDebugContext('', errorOutput, userInput)
+    }
+
+    // Step 4: Call LLM with debug prompt to get fixes
+    process.stderr.write(`[DebugFlow] Calling LLM to analyze and generate fixes...\n`)
+
+    const messages = this.buildMessageContext()
+    const lastMessage = messages[messages.length - 1]
+    if (lastMessage && lastMessage.type === 'user') {
+      lastMessage.content = `${lastMessage.content}\n\n${debugContext}`
+    }
+
+    printStreamingStart()
+
+    const accumulator = await streamLLMResponse({
+      messages,
+      systemPrompt: getSystemPrompt('debug'),
+      tools: [],
+      model: modelSelection.modelId,
+      maxTokens: modelSelection.maxTokens,
+      signal: this.abortController.signal,
+      onToken: (token) => printStreamingToken(token),
+    })
+
+    printStreamingEnd()
+
+    const assistantResponse = accumulator.output
+
+    // Step 5: Extract and execute tool calls from Claude's response
+    const toolCalls = this.extractToolCallsFromResponse(assistantResponse)
+    
+    if (toolCalls.length > 0) {
+      process.stderr.write(`[DebugFlow] Claude suggested ${toolCalls.length} fix(es)\n`)
+      process.stderr.write(`[DebugFlow] Executing fixes...\n`)
+
+      let fixResults = ''
+      for (const call of toolCalls) {
+        try {
+          const result = await this.executeModificationToolCall(call)
+          fixResults += `✓ ${result}\n`
+        } catch (err: any) {
+          process.stderr.write(`[DebugFlow] Error executing fix: ${err?.message}\n`)
+          fixResults += `✗ Failed to execute fix: ${err?.message}\n`
+        }
+      }
+
+      // Step 6: Verify the fix by running the command again
+      if (debugIntent.command) {
+        process.stderr.write(`[DebugFlow] Verifying fix by re-running command...\n`)
+        const verification = captureError(debugIntent.command, this.cwd)
+        
+        if (verification.success) {
+          process.stderr.write(`[DebugFlow] ✓ Verification successful!\n`)
+          return `✅ Fixed! Applied the following fixes:\n\n${fixResults}\n\n✨ Command now runs successfully.`
+        } else {
+          process.stderr.write(`[DebugFlow] ⚠️  Verification failed, error still present\n`)
+          return `⚠️  Applied fixes:\n\n${fixResults}\n\nBut the error persists:\n${verification.stderr}\n\nLet me try again with more context...`
+        }
+      } else {
+        return `✅ Applied fixes:\n\n${fixResults}\n\nPlease test to verify the issues are resolved.`
+      }
+    } else {
+      return assistantResponse
+    }
+  }
+
+  /**
+   * TIER 2B: Execute modification flow
    * Detects modification intent, finds files, calls LLM with file context + modification tools
    */
   private async executeModificationFlow(userInput: string, modIntent: any): Promise<string> {
@@ -470,8 +697,9 @@ export class REPL {
       process.stderr.write(`[ModificationFlow] Building file context for LLM...\n`)
       fileContextText = formatFilesForLLMContext(validatedFiles)
       process.stderr.write(`[ModificationFlow] File context prepared (${fileContextText.length} chars)\n`)
+      process.stderr.write(`[ModificationFlow] File paths in context: ${validatedFiles.map((f: any) => f.path).join(', ')}\n`)
       if (process.env.DEBUG_MODIFICATIONS) {
-        process.stderr.write(`[ModificationFlow] File context:\n${fileContextText}\n`)
+        process.stderr.write(`[ModificationFlow] File context:\n${fileContextText.substring(0, 500)}...\n`)
       }
     } catch (err: any) {
       process.stderr.write(`[ModificationFlow] Warning: Failed to format file context: ${err?.message || err}\n`)
@@ -500,16 +728,23 @@ export class REPL {
 
     let accumulator: any = null
     try {
-      process.stderr.write(`[ModificationFlow] Calling LLM with modification schemas...\n`)
+      process.stderr.write(`[ModificationFlow] Calling LLM with modification tools...\n`)
       
-      // Step 4: Call LLM with file context (no tool schemas - LLM will respond as text)
-      // We'll parse tool calls from the natural text response instead
+      // Step 4: Call LLM with custom modification tool schemas
+      // These are optimized schemas for code modification (saves tokens vs full tools)
+      const { MODIFICATION_TOOL_SCHEMAS } = await import('./modification-executor.js')
+      
+      const modificationModel = selectModelForQuery(userInput, true, this.fileCache)
+      
+      process.stderr.write(`[ModificationFlow] Using ${modificationModel.model?.name} for modification\n`)
+      process.stderr.write(`[ModificationFlow] Available tools: str_replace, create_file, append_file\n`)
+      
       accumulator = await streamLLMResponse({
         messages,
         systemPrompt: getSystemPrompt('modification'),
-        tools: [],  // Empty array - LLM will use natural format
-        model: this.config.mainLoopModel,
-        maxTokens: this.config.maxCompletionTokens,
+        tools: MODIFICATION_TOOL_SCHEMAS as any,  // Use custom schemas, not Tool objects
+        model: modificationModel.modelId,
+        maxTokens: modificationModel.maxTokens,
         signal: this.abortController.signal,
         onToken: (token) => printStreamingToken(token),
       })
@@ -536,16 +771,9 @@ export class REPL {
     )
 
     // Step 5: Extract tool calls from LLM response
-    let toolCalls: any[] = []
-    try {
-      process.stderr.write(`[ModificationFlow] Extracting tool calls from LLM response...\n`)
-      toolCalls = this.extractToolCallsFromResponse(accumulator.textContent)
-      process.stderr.write(`[ModificationFlow] Extracted ${toolCalls.length} tool call(s)\n`)
-    } catch (err: any) {
-      process.stderr.write(`[ModificationFlow] Warning: Failed to extract tool calls: ${err?.message || err}\n`)
-      // Continue - might be text-only response
-    }
-
+    let toolCalls: any[] = accumulator.toolCalls
+    process.stderr.write(`[ModificationFlow] Tool calls in accumulator: ${toolCalls.length}\n`)
+    
     if (toolCalls.length === 0) {
       // LLM just returned text explanation, no modifications
       process.stderr.write(`[ModificationFlow] No tool calls found, returning text response\n`)
@@ -558,6 +786,7 @@ export class REPL {
     for (const toolCall of toolCalls) {
       try {
         process.stderr.write(`[ModificationFlow] Processing tool call: ${toolCall.name}\n`)
+        process.stderr.write(`[ModificationFlow] Tool input: ${JSON.stringify(toolCall.input)}\n`)
         
         // Validate before executing
         const validation = await validateModificationToolCall(
@@ -675,6 +904,29 @@ export class REPL {
 
     try {
       switch (name) {
+        case 'Read': {
+          process.stderr.write(`[ModificationFlow] Executing Read via FileReadTool: ${input.file_path}\n`)
+          
+          const tool = this.tools.find((t) => t.name === 'Read' || t.name === 'FileReadTool')
+          if (!tool) {
+            return `✗ FileReadTool not found in available tools`
+          }
+
+          try {
+            await tool.call(
+              {
+                file_path: input.file_path,
+              },
+              this.buildToolUseContext(),
+              async () => ({ behavior: 'allow' as const })
+            )
+            return `✓ Read ${input.file_path}`
+          } catch (toolErr: any) {
+            process.stderr.write(`[ModificationFlow] Tool error: ${toolErr?.message || toolErr}\n`)
+            return `✗ Failed to read ${input.file_path}: ${toolErr?.message || toolErr}`
+          }
+        }
+
         case 'str_replace': {
           process.stderr.write(`[ModificationFlow] Executing str_replace via FileEditTool: ${input.path}\n`)
           
@@ -694,8 +946,8 @@ export class REPL {
             await tool.call(
               {
                 file_path: input.path,
-                old_string: input.old_str,
-                new_string: input.new_str,
+                old_string: input.old_string,  // Changed from old_str
+                new_string: input.new_string,  // Changed from new_str
               },
               this.buildToolUseContext(),
               async () => ({ behavior: 'allow' as const }),
@@ -778,6 +1030,37 @@ export class REPL {
           } catch (toolErr: any) {
             process.stderr.write(`[ModificationFlow] Tool error: ${toolErr?.message || toolErr}\n`)
             return `✗ Failed to append to ${input.path}: ${toolErr?.message || toolErr}`
+          }
+        }
+
+        case 'Write': {
+          process.stderr.write(`[ModificationFlow] Executing Write via FileWriteTool: ${input.file_path}\n`)
+          
+          const tool = this.tools.find((t) => t.name === 'Write' || t.name === 'FileWriteTool')
+          if (!tool) {
+            return `✗ FileWriteTool not found in available tools`
+          }
+
+          try {
+            const parentMessage = {
+              uuid: randomUUID(),
+              role: 'assistant' as const,
+              content: [],
+            }
+
+            await tool.call(
+              {
+                file_path: input.file_path,
+                content: input.content,
+              },
+              this.buildToolUseContext(),
+              async () => ({ behavior: 'allow' as const }),
+              parentMessage
+            )
+            return `✓ Wrote ${input.file_path}`
+          } catch (toolErr: any) {
+            process.stderr.write(`[ModificationFlow] Tool error: ${toolErr?.message || toolErr}\n`)
+            return `✗ Failed to write ${input.file_path}: ${toolErr?.message || toolErr}`
           }
         }
 

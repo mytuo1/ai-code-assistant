@@ -308,7 +308,13 @@ export async function validateModificationToolCall(
   fileOps: { exists: (path: string) => Promise<boolean> }
 ): Promise<{ valid: boolean; reason?: string }> {
   const { name, input } = toolCall
-  const filePath = input.path as string
+  
+  // Read and Write tools use file_path, others use path
+  const filePath = (name === 'Read' || name === 'Write' ? input.file_path : input.path) as string
+
+  if (!filePath) {
+    return { valid: false, reason: `${name}: file path is required` }
+  }
 
   // Check file scope
   if (!scopeValidator(filePath)) {
@@ -317,6 +323,14 @@ export async function validateModificationToolCall(
 
   // Validate by tool type
   switch (name) {
+    case 'Read': {
+      const exists = await fileOps.exists(filePath)
+      if (!exists) {
+        return { valid: false, reason: `Read: file ${filePath} does not exist` }
+      }
+      break
+    }
+
     case 'str_replace': {
       const oldStr = input.old_str as string
       const newStr = input.new_str as string
@@ -361,6 +375,21 @@ export async function validateModificationToolCall(
       }
 
       break
+    }
+
+    case 'Write': {
+      const content = input.content as string
+
+      if (typeof content !== 'string') {
+        return { valid: false, reason: 'Write: content must be a string' }
+      }
+
+      // Write can create or overwrite files - no existence check needed
+      break
+    }
+
+    default: {
+      return { valid: false, reason: `Unknown tool: ${name}` }
     }
   }
 

@@ -66,8 +66,8 @@ const DEFAULT_CONFIG: REPLConfig = {
   apiKey: process.env.OPENAI_API_KEY || '',
   apiBaseUrl: process.env.OPENAI_BASE_URL,
 
-  mainLoopModel: 'gpt-3.5-turbo',
-  smallFastModel: 'gpt-4-mini',
+  mainLoopModel: 'gpt-5.4-nano',
+  smallFastModel: 'gpt-5.4-mini',
   maxCompletionTokens: 4096,
   contextWindowSize: 128000,
 
