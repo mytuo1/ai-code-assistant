@@ -117,10 +117,17 @@ private async loadTools(): Promise<void> {
   try {
     const allTools = getAllBaseTools();
     
-    // Force include FileEditTool if missing
-    if (!allTools.some(t => t.name === 'FileEditTool' || t.name.includes('Edit'))) {
+    // Force include critical tools
+    const hasEdit = allTools.some(t => t.name === 'FileEditTool' || t.name.includes('Edit'));
+    if (!hasEdit) {
       const { FileEditTool } = await import('../tools/FileEditTool/FileEditTool.js');
-      allTools.push(FileEditTool);
+      allTools.push(new FileEditTool());   // note: use 'new' if it's a class
+    }
+
+    const hasGlob = allTools.some(t => t.name === 'Glob' || t.name.includes('Glob'));
+    if (!hasGlob) {
+      const { GlobTool } = await import('../tools/GlobTool/GlobTool.js');
+      allTools.push(new GlobTool());
     }
 
     this.tools = allTools;

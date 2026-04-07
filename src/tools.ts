@@ -10,6 +10,7 @@ import { WebFetchTool } from './tools/WebFetchTool/WebFetchTool.js';
 import { TodoWriteTool } from './tools/TodoWriteTool/TodoWriteTool.js';
 import { WebSearchTool } from './tools/WebSearchTool/WebSearchTool.js';
 import { ReadMcpResourceTool } from './tools/ReadMcpResourceTool/ReadMcpResourceTool.js';
+import { GlobTool } from './tools/GlobTool/GlobTool.js'
 
 // List of available tools (already instantiated)
 const existingTools = [
@@ -21,6 +22,7 @@ const existingTools = [
   TodoWriteTool,
   WebSearchTool,
   ReadMcpResourceTool,
+  GlobTool,
 ].filter(Boolean);
 
 export function getAllBaseTools() {
