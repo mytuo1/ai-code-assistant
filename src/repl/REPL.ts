@@ -1,7 +1,7 @@
 import { createInterface } from 'readline'
 import { homedir } from 'os'
 import { resolve, join } from 'path'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, rmdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'fs'
 import { randomUUID } from 'crypto'
 
 import type { REPLConfig } from './config.js'
@@ -1364,26 +1364,36 @@ export class REPL {
   }
 
   /**
-   * Try to resume last session
+   * Try to resume last session — now with strong corruption guard
    */
   private async tryResumeSession(): Promise<boolean> {
     const sessionFile = this.expandPath(this.config.conversation.sessionFile)
+
+    // Immediate corruption check BEFORE showing any prompt
+    if (existsSync(sessionFile)) {
+      try {
+        const data = readFileSync(sessionFile, 'utf-8')
+        JSON.parse(data) // test parse
+      } catch (err: any) {
+        process.stderr.write(`[REPL] Corrupted session file detected (${sessionFile}). Deleting it.\n`)
+        try {
+          rmSync(sessionFile, { force: true })
+        } catch {}
+        // Fall through to fresh session
+        return false
+      }
+    }
 
     if (!this.config.conversation.persistSession || !existsSync(sessionFile)) {
       return false
     }
 
-    // Prompt user
+    // Prompt user (file is now guaranteed valid)
     const shouldResume = await promptConfirmation(
       'Resume last session? (Yes/No)'
     )
 
     if (!shouldResume) {
-      // Delete corrupted session file so it never happens again
-      try {
-        rmSync(sessionFile, { force: true })
-        process.stderr.write(`[REPL] Deleted corrupted session file\n`)
-      } catch {}
       return false
     }
 
@@ -1400,11 +1410,8 @@ export class REPL {
         return true
       }
     } catch (err: any) {
-      process.stderr.write(`[REPL] Corrupted session file detected. Deleting it.\n`)
-      try {
-        rmSync(sessionFile, { force: true })
-      } catch {}
-      // Start fresh
+      process.stderr.write(`[REPL] Unexpected session error. Starting fresh.\n`)
+      try { rmSync(sessionFile, { force: true }) } catch {}
     }
 
     return false
