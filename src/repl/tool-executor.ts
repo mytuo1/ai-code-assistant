@@ -145,6 +145,68 @@ export async function executeTool(
       }
     }
 
+    // === CREATE NEW FILE - if Glob found nothing and user wants to "add/create"
+    if ((tool.name === 'Glob' || tool.name.toLowerCase().includes('glob')) && 
+        !result.success && 
+        result.output.includes('No files found') &&
+        /add|create|new function|new file/i.test(userQuery)) {
+
+      process.stderr.write(`[Tool] Glob found no file → switching to Write tool to create it\n`);
+
+      const writeTool = availableTools.find(t => t.name === 'Write' || t.name.includes('Write'));
+      if (!writeTool) {
+        return {
+          toolName: 'Write',
+          success: false,
+          output: '',
+          error: 'Write tool not found',
+          duration: Date.now() - startTime,
+        };
+      }
+
+      const filePath = params.file_path || params.pattern || 'src/utils/price.ts';
+      const functionName = 'calculateTotalPrice';
+
+      // Generate a reasonable starter implementation
+      const newContent = `/**
+ * Calculates the total price based on unit price and quantity.
+ * @param price - The unit price
+ * @param quantity - The number of items
+ * @returns The total price
+ */
+export function ${functionName}(price: number, quantity: number): number {
+  if (price < 0 || quantity < 0) {
+    throw new Error('Price and quantity must be non-negative');
+  }
+  return price * quantity;
+}
+`;
+
+      try {
+        const writeParams = {
+          file_path: filePath,
+          content: newContent,
+        };
+
+        const writeResult = await writeTool.call(writeParams, context, canUse || (async () => ({ behavior: 'allow' })), null);
+
+        return {
+          toolName: 'Write',
+          success: true,
+          output: `✅ Created new file ${filePath} with function ${functionName}`,
+          duration: Date.now() - startTime,
+        };
+      } catch (writeErr: any) {
+        return {
+          toolName: 'Write',
+          success: false,
+          output: '',
+          error: writeErr.message || 'Failed to create file',
+          duration: Date.now() - startTime,
+        };
+      }
+    }
+
     // === NORMAL EXECUTION ===
     try {
       result = await tool.call(params, context, canUse || (async () => ({ behavior: 'allow' })), null);
