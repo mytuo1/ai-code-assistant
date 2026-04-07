@@ -1110,8 +1110,14 @@ private async loadTools(): Promise<void> {
     const readFileState = new Map();
     const userModified = new Map();
     const dynamicSkillDirTriggers = new Set();
+    const alwaysDenyRules = new Set();
 
-    // Minimal but sufficient context to satisfy GlobTool and FileEditTool
+    // Minimal but sufficient appState for GlobTool and other tools
+    const appState = {
+      toolPermissionContext: this.permissionContext || getEmptyToolPermissionContext(),
+      globLimits: { maxResults: 100 },
+    };
+
     return {
       options: {
         commands: [],
@@ -1128,19 +1134,23 @@ private async loadTools(): Promise<void> {
           annotateStderrWithSandboxFailures: (command: string, output: string) => output,
         },
       },
+
       abortController: this.abortController || new AbortController(),
 
-      // Critical fields many tools expect
+      // Required by GlobTool and many others
       readFileState,
       userModified,
       dynamicSkillDirTriggers,
+      alwaysDenyRules,
 
-      // Permission / deny rules (fixes the Glob error)
-      alwaysDenyRules: new Set(),
+      // Permission system
       permissionContext: this.permissionContext || getEmptyToolPermissionContext(),
 
-      // State stubs
-      getAppState: () => ({} as any),
+      // Critical for GlobTool
+      getAppState: () => appState,
+      globLimits: { maxResults: 100 },
+
+      // State management stubs
       setAppState: (f: any) => {},
       setInProgressToolUseIDs: (f: any) => new Set(),
       setResponseLength: (f: any) => 0,
@@ -1148,7 +1158,7 @@ private async loadTools(): Promise<void> {
       updateFileHistoryState: (f: any) => {},
       updateAttributionState: (f: any) => {},
 
-      // Conversation messages
+      // Messages for context
       messages: this.conversation || [],
     };
   }
