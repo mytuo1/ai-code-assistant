@@ -271,6 +271,54 @@ private async loadTools(): Promise<void> {
       }
     }
 
+    // PROPOSAL MODE - the main user-friendly workflow
+    if (/add|create|fix|implement|refactor|improve|new feature|change.*logic|update.*function/i.test(userInput.toLowerCase())) {
+      process.stderr.write(`[REPL] Entering proposal mode for complex request\n`);
+
+      const messages = this.buildMessageContext();
+
+      printStreamingStart();
+
+      const accumulator = await streamLLMResponse({
+        messages,
+        systemPrompt: asSystemPrompt(getSystemPrompt('proposal')),
+        tools: [FileReadTool], // allow reading files for accurate proposals
+        model: this.config.mainLoopModel || 'gpt-4o-mini',
+        maxTokens: 1200,
+        signal: this.abortController.signal,
+        onToken: (token) => printStreamingToken(token),
+      });
+
+      printStreamingEnd();
+
+      const proposal = accumulator.output || "No proposal generated.";
+
+      process.stdout.write('\n✨ \x1b[1;36mProposed Changes:\x1b[0m\n');
+      process.stdout.write(proposal + '\n\n');
+
+      // Ask for user confirmation
+      const shouldApply = await promptConfirmation('Apply these changes? (Yes/No)');
+
+      if (shouldApply) {
+        process.stderr.write(`[REPL] User accepted proposal. Applying changes...\n`);
+        // For now, show a placeholder (we can add auto-apply in the next step)
+        const applyResult = "Proposal accepted. Changes would be applied here (auto-apply coming soon).";
+        return {
+          id: randomUUID(),
+          type: 'assistant' as const,
+          timestamp: new Date(),
+          content: applyResult,
+        };
+      } else {
+        return {
+          id: randomUUID(),
+          type: 'assistant' as const,
+          timestamp: new Date(),
+          content: "Proposal rejected. What would you like to change?",
+        };
+      }
+    }
+
     // TIER 2: Check for debug/fix requests
     // For: "something's not working", "fix this error", etc.
     const debugIntent = detectDebugIntent(userInput)
