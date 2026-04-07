@@ -49,6 +49,7 @@ import { captureError, buildDebugContext } from './error-capture.js'
 import { selectModelForQuery, formatModelSelection } from './model-selector.js'
 import { analyzeQueryComplexity } from './query-complexity.js'
 import { SessionFileCache, formatCachedFilesForContext } from './session-file-cache.js'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'fs'
 
 // Global session file cache instance
 const fileCache = new SessionFileCache()
@@ -237,7 +238,7 @@ export class REPL {
     // TIER 1: Try direct execution (0 API tokens)
     // For: bash pwd, read file.ts, grep pattern src/
     if (needsDirectExecution(userInput)) {
-      // FORCE direct execution for file/version queries (fixes "what's the version of my package.json")
+      // FORCE direct execution for file/version queries (your exact test case)
       if (/package\.json|version of|contents of|\.ts|\.js|\.json|\.yaml|\.yml|tsconfig/i.test(userInput)) {
         const directResult = await this.tryDirectToolExecution(userInput);
         if (directResult !== null) {
@@ -245,7 +246,7 @@ export class REPL {
             id: randomUUID(),
             type: 'assistant' as const,
             timestamp: new Date(),
-            content: directResult,   // string from tool → wrapped correctly
+            content: directResult,
           };
         }
       }
@@ -330,6 +331,13 @@ export class REPL {
     const isModification = modIntent && modIntent.isModification && modIntent.confidence >= 0.40
     
     const modelSelection = selectModelForQuery(userInput, isModification)
+    // SAFETY: prevent the 'none' model crash you just saw
+    let modelIdToUse = modelSelection.modelId;
+    if (!modelIdToUse || modelIdToUse === 'none') {
+      modelIdToUse = this.config.mainLoopModel || 'gpt-4o-mini';
+      process.stderr.write(`[REPL] ⚠️ Model was 'none' — falling back to ${modelIdToUse}\n`);
+    }
+
     
     if (process.env.DEBUG_MODIFICATIONS || process.env.DEBUG) {
       process.stderr.write(formatModelSelection(modelSelection) + '\n')
@@ -383,7 +391,7 @@ export class REPL {
     }
     
     // Determine which model and how to log
-    let modelIdToUse = modelSelection.modelId
+    //let modelIdToUse = modelSelection.modelId
     
     if (process.env.DEBUG_MODIFICATIONS || process.env.DEBUG) {
       process.stderr.write(`[Tier${modelSelection.tier.slice(-1)}] Using ${modelSelection.model?.name || 'direct execution'}\n`)
@@ -1362,10 +1370,7 @@ export class REPL {
   private async tryResumeSession(): Promise<boolean> {
     const sessionFile = this.expandPath(this.config.conversation.sessionFile)
 
-    if (
-      !this.config.conversation.persistSession ||
-      !existsSync(sessionFile)
-    ) {
+    if (!this.config.conversation.persistSession || !existsSync(sessionFile)) {
       return false
     }
 
@@ -1375,6 +1380,8 @@ export class REPL {
     )
 
     if (!shouldResume) {
+      // Optional: delete corrupted session file when user says "no"
+      try { rmSync(sessionFile, { force: true }) } catch {}      
       return false
     }
 
@@ -1391,7 +1398,11 @@ export class REPL {
         return true
       }
     } catch (err) {
-      process.stderr.write(`[WARN] Could not resume session: ${err}\n`)
+      process.stderr.write(`[WARN] Corrupted session file detected (${sessionFile}). Deleting it.\n`)
+      try {
+        rmSync(sessionFile, { force: true }) // delete the bad file so it never happens again
+      } catch (e) {}
+      // Fall through — start fresh session
     }
 
     return false
