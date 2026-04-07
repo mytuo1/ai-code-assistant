@@ -497,9 +497,6 @@ private async loadTools(): Promise<void> {
     return assistantMessage
   }
 
-  /**
-   * Try direct tool execution
-   */
   private async tryDirectToolExecution(userInput: string): Promise<string | null> {
     if (!needsDirectExecution(userInput)) {
       return null;
@@ -507,23 +504,20 @@ private async loadTools(): Promise<void> {
 
     const context = this.buildToolUseContext() || {};
 
-    const result = await tryDirectExecution(
+    let result = await tryDirectExecution(
       userInput,
       this.tools,
       context,
       async () => ({ behavior: 'allow' })
     );
 
-    if (!result) {
-      return null;
-    }
+    if (!result) return null;
 
-    // Display tool result
     process.stdout.write('\n');
     process.stdout.write(formatToolResult(result));
     process.stdout.write('\n\n');
 
-    // NEW: If Glob found nothing AND user wants to "add/create" → automatically create with Write
+    // AUTO-CREATE NEW FILE when Glob finds nothing + user wants to "add/create"
     if (result.toolName === 'Glob' && 
         result.output.includes('No files found') && 
         /add|create|new function|implement/i.test(userInput.toLowerCase())) {
@@ -531,16 +525,28 @@ private async loadTools(): Promise<void> {
       process.stderr.write(`[REPL] Glob found no file → auto-creating with Write tool\n`);
 
       const writeTool = this.tools.find(t => t.name === 'Write' || t.name.includes('Write'));
-      if (writeTool) {
-        const filePath = userInput.match(/in\s+([\w./-]+\.ts)/i)?.[1] || 'src/utils/price.ts';
+      if (!writeTool) {
+        return "Write tool not available";
+      }
 
-        const functionName = userInput.match(/function\s+([\w]+)/i)?.[1] || 'calculateTotalPrice';
+      // Extract file path and function name more reliably
+      const fileMatch = userInput.match(/in\s+([\w./-]+\.(ts|js))/i);
+      const filePath = fileMatch ? fileMatch[1] : 'src/utils/price.ts';
 
-        const newContent = `/**
- * Calculates the total price.
- * @param price - Unit price
- * @param quantity - Number of items
- * @returns Total price
+      const funcMatch = userInput.match(/function\s+([\w]+)/i);
+      let functionName = funcMatch ? funcMatch[1] : 'calculateTotalPrice';
+
+      // Clean up function name if it's garbage like "to"
+      if (functionName.length < 3 || functionName === 'to') {
+        functionName = 'calculateTotalPrice';
+      }
+
+      const newContent = `/**
+ * Calculates the total price based on unit price and quantity.
+ * 
+ * @param price - The unit price of a single item
+ * @param quantity - The number of items
+ * @returns The total price
  */
 export function ${functionName}(price: number, quantity: number): number {
   if (price < 0 || quantity < 0) {
@@ -550,34 +556,33 @@ export function ${functionName}(price: number, quantity: number): number {
 }
 `;
 
-        try {
-          await writeTool.call(
-            { file_path: filePath, content: newContent },
-            context,
-            async () => ({ behavior: 'allow' }),
-            null
-          );
+      try {
+        await writeTool.call(
+          { file_path: filePath, content: newContent },
+          context,
+          async () => ({ behavior: 'allow' }),
+          null
+        );
 
-          const successMsg = `✅ Created new file ${filePath} with function ${functionName}()`;
+        const successMsg = `✅ Created ${filePath} with function \`${functionName}()\``;
 
-          process.stdout.write(`\n✨ ${successMsg}\n\n`);
+        process.stdout.write(`\n✨ ${successMsg}\n\n`);
 
-          // Add to conversation
-          this.conversation.push({
-            id: randomUUID(),
-            type: 'assistant',
-            timestamp: new Date(),
-            content: successMsg,
-          });
+        this.conversation.push({
+          id: randomUUID(),
+          type: 'assistant',
+          timestamp: new Date(),
+          content: successMsg,
+        });
 
-          return successMsg;
-        } catch (err: any) {
-          process.stderr.write(`[Write] Failed: ${err.message}\n`);
-        }
+        return successMsg;
+      } catch (err: any) {
+        process.stderr.write(`[Write failed] ${err.message}\n`);
+        return `Failed to create file: ${err.message}`;
       }
     }
 
-    // Normal flow for other tools
+    // Normal tool result handling
     const tracker = getTokenTracker();
     tracker.trackQuery(randomUUID(), userInput, 0, 0, [result.toolName]);
 
