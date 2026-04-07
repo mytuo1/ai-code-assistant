@@ -140,19 +140,40 @@ export async function tryDirectExecution(
 ): Promise<ToolExecutionResult | null> {
   // Match tools to query
   const matches = matchToolsForQuery(userQuery)
-  console.log(`[DEBUG] Query: "${userQuery}" → Top match: ${matches[0]?.toolName} (${matches[0]?.confidence})`);
+  console.log(`[DEBUG] Query: "${userQuery}"`);
+  console.log(`[DEBUG] Matches: ${matches.map(m => `${m.toolName}(${m.confidence.toFixed(2)})`).join(', ')}`);
+
+  const match1 = matches[0];
+  if (match1) {
+    console.log(`[DEBUG] Selected match: ${match1.toolName} (${match1.confidence})`);
+  }
 
   if (matches.length === 0 || matches[0].confidence < 0.3) {
     return null // No confident match, need LLM
   }
 
-  const match = matches[0]
+  const match = matches[0];
   
-  // Find the actual tool object from availableTools
-  const toolObj = availableTools.find(t => t.name === match.toolName)
-  if (!toolObj) {
-    return null // Tool not found
+  if (!match || match.confidence < 0.7) {
+    console.log(`[DEBUG] No confident match, falling back`);
+    return null;
   }
+
+  // Find the actual tool object - be more flexible with name matching
+  // Find the actual tool object - be more flexible
+  const toolObj = availableTools.find(t => 
+    t.name === match.toolName || 
+    t.name.toLowerCase().includes(match.toolName.toLowerCase()) ||
+    t.name.toLowerCase().includes('edit')
+  );
+
+  console.log(`[DEBUG] Available tool names: ${availableTools.map(t => t.name).join(', ')}`);
+  console.log(`[DEBUG] Found toolObj for ${match.toolName}: ${toolObj ? toolObj.name : 'NOT FOUND'}`);
+  if (toolObj) {
+    console.log(`[DEBUG] Tool has .call method: ${typeof toolObj.call}`);
+  }
+
+  console.log(`[DEBUG] Found tool object: ${toolObj.name}`);
 
   const result = await executeTool(
     match.toolName,
