@@ -142,13 +142,22 @@ export function formatToolResult(result: ToolExecutionResult): string {
     return `❌ ${result.toolName} failed: ${result.error}`
   }
 
-  const lines = result.output.split('\n').length
-  const preview =
-    result.output.length > 500
-      ? result.output.slice(0, 500) + '\n...(truncated)'
-      : result.output
+  let preview = result.output
+  if (result.output.length > 600) {
+    preview = result.output.slice(0, 600) + '\n...(truncated)'
+  }
 
-  return `✓ ${result.toolName} (${result.duration}ms, ${lines} lines):\n${preview}`
+  // Special nice formatting for package.json version queries
+  if (result.toolName === 'Read' && result.output.includes('"version"')) {
+    try {
+      const pkg = JSON.parse(result.output)
+      if (pkg.version) {
+        preview = `Package version: ${pkg.version}\n\nFull package.json preview:\n${preview}`
+      }
+    } catch {}
+  }
+
+  return `✓ ${result.toolName} (${result.duration}ms):\n${preview}`
 }
 
 /**
