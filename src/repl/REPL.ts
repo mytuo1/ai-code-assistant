@@ -32,6 +32,7 @@ import { init } from '../entrypoints/init.js'
 import { initializeToolPermissionContext } from '../utils/permissions/permissionSetup.js'
 import { enableConfigs } from '../utils/config.js'
 import { FileReadTool } from '../tools/FileReadTool/FileReadTool.js'
+import { FileEditTool } from '../tools/FileEditTool/FileEditTool.js'
 import { FileWriteTool } from '../tools/FileWriteTool/FileWriteTool.js'
 import { BashTool } from '../tools/BashTool/BashTool.js'
 import { REPL_BUILTIN_TOOLS } from './built-in-tools.js'
@@ -112,37 +113,26 @@ export class REPL {
    * We skip getTools() filtering because it calls .isEnabled() which may
    * depend on uninitialized state. We'll do simpler filtering here.
    */
-  private async loadTools(): Promise<void> {
-    try {
-      // Get all base tools (no complex filtering)
-      const allTools = getAllBaseTools()
-
-      // Simple filtering: match against config.tools.enabled
-      // Note: We avoid calling .isEnabled() until Phase 3 (execution)
-      this.tools = allTools.filter((tool) => {
-        // Match by exact name or partial name
-        const enabled = this.config.tools.enabled.some(
-          (cfgTool) =>
-            tool.name === cfgTool ||
-            tool.name.toLowerCase().includes(cfgTool.toLowerCase()) ||
-            cfgTool.toLowerCase().includes(tool.name.toLowerCase())
-        )
-        return enabled
-      })
-
-      process.stderr.write(
-        `[REPL] Loaded ${this.tools.length} tool(s): ${this.tools.map((t) => t.name).join(', ')}\n`
-      )
-    } catch (err: any) {
-      process.stderr.write(
-        `[WARN] Could not load tools: ${err?.message}\n`
-      )
-      if (err?.stack) {
-        process.stderr.write(`[STACK] ${err.stack}\n`)
-      }
-      this.tools = []
+private async loadTools(): Promise<void> {
+  try {
+    const allTools = getAllBaseTools();
+    
+    // Force include FileEditTool if missing
+    if (!allTools.some(t => t.name === 'FileEditTool' || t.name.includes('Edit'))) {
+      const { FileEditTool } = await import('../tools/FileEditTool/FileEditTool.js');
+      allTools.push(FileEditTool);
     }
+
+    this.tools = allTools;
+
+    process.stderr.write(
+      `[REPL] Loaded ${this.tools.length} tool(s): ${this.tools.map((t) => t.name).join(', ')}\n`
+    );
+  } catch (err: any) {
+    process.stderr.write(`[WARN] Could not load tools: ${err?.message}\n`);
+    this.tools = [];
   }
+}
 
   /**
    * Guard: Validate file access against project scope
