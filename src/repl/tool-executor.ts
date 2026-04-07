@@ -22,6 +22,7 @@ export async function executeTool(
   toolName: string,
   userQuery: string,        // <-- correct order: userQuery is second param
   tool: any,
+  availableTools: Tools,
   context: ToolUseContext,
   canUse: any
 ): Promise<ToolExecutionResult> {
@@ -51,9 +52,22 @@ export async function executeTool(
 
     let result: any = null;
 
-    // === EDIT PATH (FileEditTool) ===
+    // === EDIT PATH - Read first, then edit (more reliable)
     if (params.isEdit && (tool.name.includes('Edit') || tool.name === 'FileEditTool')) {
       process.stderr.write(`[Tool] Using FileEditTool (str_replace) for ${params.file_path}\n`);
+
+      // Step 1: Read the current file to get exact current content
+      const readTool = availableTools.find(t => t.name === 'Read' || t.name.includes('Read'));
+      let currentContent = '';
+      if (readTool && params.file_path) {
+        try {
+          const readResult = await readTool.call({ file_path: params.file_path }, context, canUse, null);
+          currentContent = readResult?.data?.file?.content || readResult?.data?.content || '';
+          process.stderr.write(`[Tool] Read current content for edit (${currentContent.length} chars)\n`);
+        } catch (readErr) {
+          process.stderr.write(`[Tool] Failed to read file before edit: ${readErr}\n`);
+        }
+      }
 
       const editParams = {
         file_path: params.file_path,
@@ -61,28 +75,23 @@ export async function executeTool(
         new_string: params.new_string || '"version": "1.0.2"',
       };
 
-      const safeContext = context || {};
-      result = await tool.call(editParams, safeContext, canUse, null);
-      
       try {
-        // Try the full fork-style call
         result = await tool.call(editParams, context, canUse, null);
-      } catch (e1) {
-        try {
-          // Fallback: simple call with just params
-          result = await tool.call(editParams);
-        } catch (e2) {
-          console.log(`[DEBUG] Edit call failed with both signatures: ${e2.message}`);
-          throw e2;
-        }
+        return {
+          toolName: 'Edit',
+          success: true,
+          output: `✅ Successfully updated ${params.file_path} (version changed to 1.0.2)`,
+          duration: Date.now() - startTime,
+        };
+      } catch (editErr: any) {
+        return {
+          toolName: 'Edit',
+          success: false,
+          output: '',
+          error: editErr.message || 'Edit failed - exact string match issue',
+          duration: Date.now() - startTime,
+        };
       }
-
-      return {
-        toolName: 'Edit',
-        success: true,
-        output: `✅ Successfully updated ${params.file_path} (version changed to 1.0.2)`,
-        duration: Date.now() - startTime,
-      };
     }
 
     // === NORMAL EXECUTION (Read, Bash, Write, etc.) ===
