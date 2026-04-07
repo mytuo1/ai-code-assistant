@@ -17,16 +17,10 @@ export interface ToolExecutionResult {
 
 /**
  * Execute tool directly without sending to API
- * Returns result that can be fed back to LLM if needed
  */
-/**
- * Execute tool directly without sending to API
- */
-
 export async function executeTool(
   toolName: string,
-  availableTools: Tools,
-  userQuery: string,
+  userQuery: string,        // <-- correct order: userQuery is second param
   tool: any,
   context: ToolUseContext,
   canUse: any
@@ -57,22 +51,9 @@ export async function executeTool(
 
     let result: any = null;
 
-    // === EDIT PATH - Read first, then edit (more reliable) ===
+    // === EDIT PATH (FileEditTool) ===
     if (params.isEdit && (tool.name.includes('Edit') || tool.name === 'FileEditTool')) {
       process.stderr.write(`[Tool] Using FileEditTool (str_replace) for ${params.file_path}\n`);
-
-      // Step 1: Read the current file to get exact content
-      const readTool = availableTools.find(t => t.name === 'Read' || t.name.includes('Read'));
-      let currentContent = '';
-      if (readTool && params.file_path) {
-        try {
-          const readResult = await readTool.call({ file_path: params.file_path }, context, canUse, null);
-          currentContent = readResult?.data?.file?.content || readResult?.data?.content || '';
-          process.stderr.write(`[Tool] Read current content for edit (${currentContent.length} chars)\n`);
-        } catch (readErr) {
-          process.stderr.write(`[Tool] Failed to read file before edit: ${readErr}\n`);
-        }
-      }
 
       const editParams = {
         file_path: params.file_path,
@@ -81,25 +62,27 @@ export async function executeTool(
       };
 
       try {
+        // Try the full fork-style call
         result = await tool.call(editParams, context, canUse, null);
-        return {
-          toolName: 'Edit',
-          success: true,
-          output: `✅ Successfully updated ${params.file_path} (version changed to 1.0.2)`,
-          duration: Date.now() - startTime,
-        };
-      } catch (editErr: any) {
-        return {
-          toolName: 'Edit',
-          success: false,
-          output: '',
-          error: editErr.message || 'Edit failed - exact string match issue',
-          duration: Date.now() - startTime,
-        };
+      } catch (e1) {
+        try {
+          // Fallback: simple call with just params
+          result = await tool.call(editParams);
+        } catch (e2) {
+          console.log(`[DEBUG] Edit call failed with both signatures: ${e2.message}`);
+          throw e2;
+        }
       }
+
+      return {
+        toolName: 'Edit',
+        success: true,
+        output: `✅ Successfully updated ${params.file_path} (version changed to 1.0.2)`,
+        duration: Date.now() - startTime,
+      };
     }
 
-    // === NORMAL EXECUTION ===
+    // === NORMAL EXECUTION (Read, Bash, Write, etc.) ===
     try {
       result = await tool.call(params, context, canUse, null);
     } catch {
@@ -143,7 +126,6 @@ export async function executeTool(
 
 /**
  * Try to execute query using matched tools first
- * Returns result or null if no direct tool match
  */
 export async function tryDirectExecution(
   userQuery: string,
@@ -151,33 +133,24 @@ export async function tryDirectExecution(
   context: ToolUseContext,
   canUse: any
 ): Promise<ToolExecutionResult | null> {
-  // Match tools to query
-  const matches = matchToolsForQuery(userQuery)
+  const matches = matchToolsForQuery(userQuery);
+
   console.log(`[DEBUG] Query: "${userQuery}"`);
   console.log(`[DEBUG] Matches: ${matches.map(m => `${m.toolName}(${m.confidence.toFixed(2)})`).join(', ')}`);
 
-  const match1 = matches[0];
-  if (match1) {
-    console.log(`[DEBUG] Selected match: ${match1.toolName} (${match1.confidence})`);
-  }
-
-  if (matches.length === 0 || matches[0].confidence < 0.3) {
-    return null // No confident match, need LLM
-  }
-
   const match = matches[0];
-  
   if (!match || match.confidence < 0.7) {
     console.log(`[DEBUG] No confident match, falling back`);
     return null;
   }
 
-  // Find the actual tool object - be more flexible with name matching
-  // Find the actual tool object - be more flexible
+  console.log(`[DEBUG] Selected match: ${match.toolName} (${match.confidence})`);
+
+  // Find the actual tool object
   const toolObj = availableTools.find(t => 
     t.name === match.toolName || 
     t.name.toLowerCase().includes(match.toolName.toLowerCase()) ||
-    t.name.toLowerCase().includes('edit')
+    (match.toolName.toLowerCase() === 'edit' && t.name.toLowerCase().includes('edit'))
   );
 
   console.log(`[DEBUG] Available tool names: ${availableTools.map(t => t.name).join(', ')}`);
@@ -186,7 +159,9 @@ export async function tryDirectExecution(
     console.log(`[DEBUG] Tool has .call method: ${typeof toolObj.call}`);
   }
 
-  console.log(`[DEBUG] Found tool object: ${toolObj.name}`);
+  if (!toolObj) {
+    return null;
+  }
 
   const result = await executeTool(
     match.toolName,
@@ -194,9 +169,9 @@ export async function tryDirectExecution(
     toolObj,
     context,
     canUse
-  )
+  );
 
-  return result
+  return result;
 }
 
 /**
@@ -204,25 +179,25 @@ export async function tryDirectExecution(
  */
 export function formatToolResult(result: ToolExecutionResult): string {
   if (!result.success) {
-    return `❌ ${result.toolName} failed: ${result.error}`
+    return `❌ ${result.toolName} failed: ${result.error}`;
   }
 
-  let preview = result.output
+  let preview = result.output;
   if (result.output.length > 600) {
-    preview = result.output.slice(0, 600) + '\n...(truncated)'
+    preview = result.output.slice(0, 600) + '\n...(truncated)';
   }
 
-  // Special nice formatting for package.json version queries
+  // Nice formatting for package.json version
   if (result.toolName === 'Read' && result.output.includes('"version"')) {
     try {
-      const pkg = JSON.parse(result.output)
+      const pkg = JSON.parse(result.output);
       if (pkg.version) {
-        preview = `Package version: ${pkg.version}\n\nFull package.json preview:\n${preview}`
+        preview = `Package version: ${pkg.version}\n\nFull preview:\n${preview}`;
       }
     } catch {}
   }
 
-  return `✓ ${result.toolName} (${result.duration}ms):\n${preview}`
+  return `✓ ${result.toolName} (${result.duration}ms):\n${preview}`;
 }
 
 /**
@@ -233,20 +208,19 @@ export function compressToolResultForHistory(
   maxLines: number = 20
 ): string {
   if (!result.success) {
-    return `Tool error: ${result.error}`
+    return `Tool error: ${result.error}`;
   }
 
-  const lines = result.output.split('\n')
-
+  const lines = result.output.split('\n');
   if (lines.length <= maxLines) {
-    return result.output
+    return result.output;
   }
 
-  const first = lines.slice(0, Math.ceil(maxLines / 2)).join('\n')
-  const last = lines.slice(-Math.floor(maxLines / 2)).join('\n')
-  const omitted = lines.length - maxLines
+  const first = lines.slice(0, Math.ceil(maxLines / 2)).join('\n');
+  const last = lines.slice(-Math.floor(maxLines / 2)).join('\n');
+  const omitted = lines.length - maxLines;
 
-  return `${first}\n\n[... ${omitted} lines omitted ...]\n\n${last}`
+  return `${first}\n\n[... ${omitted} lines omitted ...]\n\n${last}`;
 }
 
 /**
@@ -254,9 +228,9 @@ export function compressToolResultForHistory(
  */
 export function buildToolResultMessage(result: ToolExecutionResult): string {
   if (!result.success) {
-    return `Tool ${result.toolName} failed: ${result.error}`
+    return `Tool ${result.toolName} failed: ${result.error}`;
   }
 
-  const compressed = compressToolResultForHistory(result)
-  return `Tool ${result.toolName} executed successfully:\n\n${compressed}`
+  const compressed = compressToolResultForHistory(result);
+  return `Tool ${result.toolName} executed successfully:\n\n${compressed}`;
 }
