@@ -50,6 +50,9 @@ import { selectModelForQuery, formatModelSelection } from './model-selector.js'
 import { analyzeQueryComplexity } from './query-complexity.js'
 import { SessionFileCache, formatCachedFilesForContext } from './session-file-cache.js'
 
+// Helper to satisfy the branded SystemPrompt type
+const asSystemPrompt = (prompt: string) => prompt as any;
+
 // Global session file cache instance
 const fileCache = new SessionFileCache()
 
@@ -67,6 +70,7 @@ export interface ConversationMessage {
   toolCalls?: Array<{ id: string; name: string; input: unknown }>
   usage?: { input_tokens: number; output_tokens: number }
 }
+
 
 /**
  * Main REPL class — orchestrates config, LLM streaming, tool execution, history
@@ -1233,53 +1237,29 @@ export class REPL {
             // Compress large tool outputs before adding to history
             const compressedOutput = this.compressToolResult(toolName, toolOutput || '')
             
-            // Add tool result to conversation and continue with LLM
-            // Format: tool result → add to messages → call LLM again → display response
-            process.stdout.write('\n✨ \x1b[1;36mAssistant (continued):\x1b[0m\n')
-            
-            // Add compressed tool result to conversation before calling LLM
-            this.conversation.push({
-              id: randomUUID(),
-              type: 'user',
-              timestamp: new Date(),
-              content: `Tool result for ${toolName}:\n${compressedOutput}`,
-            })
-            
-            // Call LLM again with updated conversation (using proper message format)
+            // SIMPLE: Just print the tool result + a short summary (no follow-up LLM for now)
+            process.stdout.write('\n✨ \x1b[1;36mTool Result:\x1b[0m\n')
+            process.stdout.write(compressedOutput + '\n\n')
+
+            // Optional minimal follow-up (no extra tool schemas)
             const messagesForFollowUp = this.buildMessageContext()
-            const toolsForLLM = await this.buildToolsForLLM(this.tools)
-            
-            // Pause input stream before streaming to preserve terminal state
-            if (this.prompt?.input) this.prompt.input.pause()
-            
+            messagesForFollowUp.push({
+              type: 'user',
+               content: `Tool ${toolName} returned: ${compressedOutput.substring(0, 500)}...`
+            })
+
             const followUpAccumulator = await streamLLMResponse({
               messages: messagesForFollowUp,
-              systemPrompt: getSystemPrompt(true), // Use optimized prompt
-              tools: toolsForLLM,
-              model: this.config.mainLoopModel,
-              maxTokens: this.config.maxCompletionTokens,
+              systemPrompt: getSystemPrompt('minimal'),
+              tools: [],                    // no tools for follow-up to avoid complexity
+              model: this.config.mainLoopModel || 'gpt-4o-mini',
+              maxTokens: 300,
               signal: this.abortController.signal,
               onToken: (token) => printStreamingToken(token),
             })
-            
-            // Resume input stream after streaming completes
-            if (this.prompt?.input) this.prompt.input.resume()
-            
+
             printStreamingEnd()
-            
-            // Display follow-up response summary
-            if (followUpAccumulator.toolCalls.length > 0) {
-              process.stdout.write(formatResponseSummary(followUpAccumulator))
-            }
-            
-            // Save the follow-up response
-            this.conversation.push({
-              id: randomUUID(),
-              type: 'assistant',
-              timestamp: new Date(),
-              content: followUpAccumulator.textContent,
-              toolCalls: followUpAccumulator.toolCalls,
-            })
+            process.stdout.write(followUpAccumulator.output || '')
             
           } else {
             printToolResult(toolName, false, toolOutput || 'Unknown error')
