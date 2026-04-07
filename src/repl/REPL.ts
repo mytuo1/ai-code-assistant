@@ -1,7 +1,7 @@
 import { createInterface } from 'readline'
 import { homedir } from 'os'
 import { resolve, join } from 'path'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, rmdirSync } from 'fs'
 import { randomUUID } from 'crypto'
 
 import type { REPLConfig } from './config.js'
@@ -49,7 +49,6 @@ import { captureError, buildDebugContext } from './error-capture.js'
 import { selectModelForQuery, formatModelSelection } from './model-selector.js'
 import { analyzeQueryComplexity } from './query-complexity.js'
 import { SessionFileCache, formatCachedFilesForContext } from './session-file-cache.js'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'fs'
 
 // Global session file cache instance
 const fileCache = new SessionFileCache()
@@ -1380,8 +1379,11 @@ export class REPL {
     )
 
     if (!shouldResume) {
-      // Optional: delete corrupted session file when user says "no"
-      try { rmSync(sessionFile, { force: true }) } catch {}      
+      // Delete corrupted session file so it never happens again
+      try {
+        rmSync(sessionFile, { force: true })
+        process.stderr.write(`[REPL] Deleted corrupted session file\n`)
+      } catch {}
       return false
     }
 
@@ -1397,12 +1399,12 @@ export class REPL {
         )
         return true
       }
-    } catch (err) {
-      process.stderr.write(`[WARN] Corrupted session file detected (${sessionFile}). Deleting it.\n`)
+    } catch (err: any) {
+      process.stderr.write(`[REPL] Corrupted session file detected. Deleting it.\n`)
       try {
-        rmSync(sessionFile, { force: true }) // delete the bad file so it never happens again
-      } catch (e) {}
-      // Fall through — start fresh session
+        rmSync(sessionFile, { force: true })
+      } catch {}
+      // Start fresh
     }
 
     return false
