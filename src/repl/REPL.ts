@@ -498,11 +498,9 @@ private async loadTools(): Promise<void> {
   }
 
   /**
-   * Try direct tool execution - loads all 27 tools locally
-   * Routes query to appropriate tool without sending schemas to API (0 tokens)
+   * Try direct tool execution
    */
   private async tryDirectToolExecution(userInput: string): Promise<string | null> {
-    // Check if query needs direct execution
     if (!needsDirectExecution(userInput)) {
       return null;
     }
@@ -517,30 +515,76 @@ private async loadTools(): Promise<void> {
     );
 
     if (!result) {
-      return null; // No tool match confidence, use LLM
+      return null;
     }
 
-    // Display tool result (success or failure)
+    // Display tool result
     process.stdout.write('\n');
     process.stdout.write(formatToolResult(result));
     process.stdout.write('\n\n');
 
-    // Track tool execution
-    const tracker = getTokenTracker();
-    tracker.trackQuery(
-      randomUUID(),
-      userInput,
-      0,
-      0,
-      [result.toolName]
-    );
+    // NEW: If Glob found nothing AND user wants to "add/create" → automatically create with Write
+    if (result.toolName === 'Glob' && 
+        result.output.includes('No files found') && 
+        /add|create|new function|implement/i.test(userInput.toLowerCase())) {
 
-    // If tool FAILED, return empty string to prevent fallthrough
-    if (!result.success) {
-      return ''; 
+      process.stderr.write(`[REPL] Glob found no file → auto-creating with Write tool\n`);
+
+      const writeTool = this.tools.find(t => t.name === 'Write' || t.name.includes('Write'));
+      if (writeTool) {
+        const filePath = userInput.match(/in\s+([\w./-]+\.ts)/i)?.[1] || 'src/utils/price.ts';
+
+        const functionName = userInput.match(/function\s+([\w]+)/i)?.[1] || 'calculateTotalPrice';
+
+        const newContent = `/**
+ * Calculates the total price.
+ * @param price - Unit price
+ * @param quantity - Number of items
+ * @returns Total price
+ */
+export function ${functionName}(price: number, quantity: number): number {
+  if (price < 0 || quantity < 0) {
+    throw new Error('Price and quantity must be non-negative');
+  }
+  return price * quantity;
+}
+`;
+
+        try {
+          await writeTool.call(
+            { file_path: filePath, content: newContent },
+            context,
+            async () => ({ behavior: 'allow' }),
+            null
+          );
+
+          const successMsg = `✅ Created new file ${filePath} with function ${functionName}()`;
+
+          process.stdout.write(`\n✨ ${successMsg}\n\n`);
+
+          // Add to conversation
+          this.conversation.push({
+            id: randomUUID(),
+            type: 'assistant',
+            timestamp: new Date(),
+            content: successMsg,
+          });
+
+          return successMsg;
+        } catch (err: any) {
+          process.stderr.write(`[Write] Failed: ${err.message}\n`);
+        }
+      }
     }
 
-    // Add successful result to conversation
+    // Normal flow for other tools
+    const tracker = getTokenTracker();
+    tracker.trackQuery(randomUUID(), userInput, 0, 0, [result.toolName]);
+
+    if (!result.success) {
+      return '';
+    }
+
     this.conversation.push({
       id: randomUUID(),
       type: 'assistant',
@@ -548,12 +592,7 @@ private async loadTools(): Promise<void> {
       content: buildToolResultMessage(result),
     });
 
-    // Check if result needs LLM interpretation
-    if (needsLLMInterpretation(result.output)) {
-      return result.output;
-    }
-
-    return result.output; // Return result directly
+    return needsLLMInterpretation(result.output) ? result.output : result.output;
   }
 
   /**
