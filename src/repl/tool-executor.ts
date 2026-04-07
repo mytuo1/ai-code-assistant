@@ -140,6 +140,7 @@ export async function tryDirectExecution(
 ): Promise<ToolExecutionResult | null> {
   // Match tools to query
   const matches = matchToolsForQuery(userQuery)
+  console.log(`[DEBUG] Query: "${userQuery}" → Top match: ${matches[0]?.toolName} (${matches[0]?.confidence})`);
 
   if (matches.length === 0 || matches[0].confidence < 0.3) {
     return null // No confident match, need LLM

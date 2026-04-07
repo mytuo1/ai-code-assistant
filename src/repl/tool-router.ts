@@ -242,26 +242,31 @@ export function needsLLMInterpretation(output: string): boolean {
  * Improved natural language tool matching
  */
 export function matchToolsForQuery(query: string): ToolMatch[] {
-  const lower = query.toLowerCase()
-  const matches: ToolMatch[] = []
+  const lower = query.toLowerCase();
+  const matches: ToolMatch[] = [];
 
-  // HIGH PRIORITY: Modification / Edit detection
-  if (/change|update|set|replace|modify/i.test(lower)) {
-    matches.push({ toolName: 'Edit', confidence: 0.98, reason: 'Modification language detected' });
-  }
-
-  // Version change is a strong edit signal
-  if (/version/i.test(lower) && /change|update|set|to/i.test(lower)) {
-    matches.push({ 
-      toolName: 'Edit', 
-      confidence: 0.98, 
-      reason: 'Version change request' 
+  // HIGHEST PRIORITY: Any modification language → force Edit
+  if (/change|update|set|replace|modify|to 1\.0\./i.test(lower)) {
+    matches.push({
+      toolName: 'Edit',
+      confidence: 0.99,
+      reason: 'Modification language detected'
     });
   }
 
-  // General file read patterns (lower priority than edit)
-  if (/read|show|view|display|cat|open|contents of|what is in|version of/i.test(lower)) {
-    matches.push({ toolName: 'Read', confidence: 0.90, reason: 'General read request' });
+  // Version change is almost always an edit
+  if (/version/i.test(lower) && /change|update|set|replace/i.test(lower)) {
+    matches.push({
+      toolName: 'Edit',
+      confidence: 0.99,
+      reason: 'Version change request'
+    });
+  }
+
+  // Read is only for pure read queries
+  if (/read|show|view|display|cat|contents of|what is the version of/i.test(lower) && 
+      !/change|update|set|replace|modify/i.test(lower)) {
+    matches.push({ toolName: 'Read', confidence: 0.90, reason: 'Read request' });
   }
 
   // Fallback to existing keyword patterns
@@ -276,18 +281,17 @@ export function matchToolsForQuery(query: string): ToolMatch[] {
       matches.push({
         toolName,
         confidence: score,
-        reason: `Keyword match: ${pattern.keywords.find(k => lower.includes(k))}`,
+        reason: `Keyword match`,
       });
     }
   }
 
-  // Remove duplicates, keep highest confidence per tool
+  // Deduplicate and sort by confidence
   const unique = matches.filter((v, i, a) => a.findIndex(t => t.toolName === v.toolName) === i);
   unique.sort((a, b) => b.confidence - a.confidence);
 
   return unique;
 }
-
 /**
  * Smart param extractor for any natural language query
  */
