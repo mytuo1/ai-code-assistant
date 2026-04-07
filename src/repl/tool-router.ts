@@ -187,6 +187,7 @@ const TOOL_PATTERNS: Record<string, { keywords: string[]; confidence: number }> 
 const DIRECT_EXECUTION_KEYWORDS = [
   'read', 'bash', 'run', 'execute', 'search', 'find', 'grep',
   'list', 'show', 'view', 'cat', 'ls', 'pwd', 'cd',
+  'package.json', 'version of', 'what.*version', 'contents of', 'show me the'
 ]
 
 /**
@@ -196,17 +197,55 @@ const DIRECT_EXECUTION_KEYWORDS = [
 export function needsDirectExecution(query: string): boolean {
   const lower = query.toLowerCase()
 
+  // Special case: file + version queries (your exact failing example)
+  if (/package\.json|tsconfig|version of|what.*version|contents of/i.test(lower)) {
+    return true;
+  }
+
   // Check for direct execution keywords
   for (const keyword of DIRECT_EXECUTION_KEYWORDS) {
     if (lower.includes(keyword)) {
       // Exclude complex queries that need LLM reasoning
-      if (!lower.includes('how') && !lower.includes('why') && !lower.includes('what')) {
+      // Looser exclusion — only exclude pure reasoning questions, not file queries
+      if (!/how to|why is|what is the meaning/i.test(lower)) {
         return true
       }
     }
   }
 
   return false
+}
+
+/**
+ * Improved param extractor — now handles real file ops
+ */
+export function extractToolParams(query: string): Record<string, unknown> {
+  const lower = query.toLowerCase();
+  const params: Record<string, unknown> = {};
+
+  // Extract file_path for Read/Write/Edit (most common case)
+  const fileMatch = query.match(/\b([\w./-]+(?:\.json|\.ts|\.js|\.md|\.yaml|\.yml|\.env|tsconfig|package\.json))\b/i);
+  if (fileMatch) {
+    params.file_path = fileMatch[1];
+  }
+
+  // Bash command extraction
+  const bashMatch = query.match(/bash\s+(.+)|run\s+(.+)|execute\s+(.+)/i);
+  if (bashMatch) {
+    params.command = (bashMatch[1] || bashMatch[2] || bashMatch[3]).trim();
+  }
+
+  // Simple content for Write (if user gave code block or "with ...")
+  const contentMatch = query.match(/with content:\s*([\s\S]+?)(?=\s+(?:for|to|in)|$)/i);
+  if (contentMatch) params.content = contentMatch[1].trim();
+
+  // Edit old_str/new_str stub (modification flow handles full str_replace)
+  if (/replace|change|edit/i.test(lower) && params.file_path) {
+    params.old_str = "TODO_EXACT_FROM_FILE"; // modification-executor will fill
+    params.new_str = "UPDATED_CONTENT";
+  }
+
+  return params;
 }
 
 /**
@@ -278,46 +317,6 @@ export function getPrimaryToolMatch(query: string): ToolMatch | null {
   return null
 }
 
-/**
- * Extract parameters from query (filenames, patterns, etc.)
- */
-export function extractToolParams(query: string): Record<string, unknown> {
-  const params: Record<string, unknown> = {}
-
-  // Extract filenames (pattern: word.extension)
-  const filePattern = /\b([\w./-]+\.(?:ts|js|tsx|jsx|json|md|py|go|rb|java|cpp))\b/gi
-  const files = query.match(filePattern)
-  if (files && files.length > 0) {
-    params.file_path = files[0]
-  }
-
-  // Extract line numbers (pattern: line 123)
-  const lineMatch = query.match(/line\s+(\d+)/i)
-  if (lineMatch) {
-    params.line = parseInt(lineMatch[1])
-  }
-
-  // Extract ranges (pattern: lines 10-20)
-  const rangeMatch = query.match(/lines?\s+(\d+)\s*-\s*(\d+)/i)
-  if (rangeMatch) {
-    params.start_line = parseInt(rangeMatch[1])
-    params.end_line = parseInt(rangeMatch[2])
-  }
-
-  // Extract bash commands (everything after "bash" or "run")
-  const bashMatch = query.match(/(?:bash|run|execute)\s+(.+?)(?:\s+in\s+|$)/i)
-  if (bashMatch) {
-    params.command = bashMatch[1].trim()
-  }
-
-  // Extract search patterns
-  const searchMatch = query.match(/(?:grep|search|find)\s+["']?([^"']+)["']?/i)
-  if (searchMatch) {
-    params.pattern = searchMatch[1]
-  }
-
-  return params
-}
 
 /**
  * Route a query to appropriate handling

@@ -1,7 +1,18 @@
 /**
  * Optimized System Prompt - No tool schemas needed anymore
+ * Now includes explicit tool usage rules so LLM knows to trigger direct execution
  * Ultra-minimal since tools execute locally
  */
+
+export const TOOL_USAGE_INSTRUCTION = `
+AVAILABLE TOOLS (use these names in your thinking):
+- Read: read any file (use for package.json, .ts, etc.)
+- Write: create new file with full content
+- Edit: use str_replace for changes (exact old_str → new_str)
+- Bash: run shell commands (npm, bun, ls, etc.)
+
+RULE: If you need file content or to run a command, the system will auto-execute the matching tool if you mention the file/command. You do NOT need to ask the user for the file path — just respond naturally after the tool result.`
+
 
 export const ULTRA_MINIMAL_SYSTEM_PROMPT = `You are a code assistant. Help users with programming tasks. Be concise.`
 
@@ -103,20 +114,16 @@ NEVER recreate the whole file unless explicitly asked to create a NEW file.`
 
 export function getSystemPrompt(optimized: 'ultra' | 'minimal' | 'detailed' | 'modification' | 'file-reading' | 'debug' = 'minimal'): string {
   switch (optimized) {
-    case 'ultra':
-      return ULTRA_MINIMAL_SYSTEM_PROMPT
-    case 'minimal':
-      return MINIMAL_SYSTEM_PROMPT
-    case 'detailed':
-      return DETAILED_SYSTEM_PROMPT
-    case 'modification':
-      return MODIFICATION_SYSTEM_PROMPT
-    case 'file-reading':
-      return FILE_READING_SYSTEM_PROMPT
-    case 'debug':
-      return DEBUG_SYSTEM_PROMPT
-    default:
-      return MINIMAL_SYSTEM_PROMPT
+     case 'minimal':
+       return MINIMAL_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
+     case 'detailed':
+     case 'file-reading':
+     case 'modification':
+       return DETAILED_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
+     case 'modification':
+       return MODIFICATION_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
+     default:
+       return MINIMAL_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
   }
 }
 

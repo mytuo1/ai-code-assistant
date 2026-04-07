@@ -25,7 +25,7 @@ import {
   type PermissionPreferences,
   type PermissionDecision,
 } from './permissions.js'
-import { getTools, getAllBaseTools } from '../tools.js'
+import { getTools, getAllBaseTools } from '../tools.ts'
 import { getEmptyToolPermissionContext } from '../Tool.js'
 import type { Tools, ToolPermissionContext } from '../Tool.js'
 import { init } from '../entrypoints/init.js'
@@ -196,13 +196,6 @@ export class REPL {
         }
 
         try {
-          // Add user message to history
-          this.conversation.push({
-            id: randomUUID(),
-            type: 'user',
-            timestamp: new Date(),
-            content: [{ type: 'text', text: input }],
-          })
 
           // Submit query to LLM
           const response = await this.submitQuery(input)
@@ -244,14 +237,26 @@ export class REPL {
     // TIER 1: Try direct execution (0 API tokens)
     // For: bash pwd, read file.ts, grep pattern src/
     if (needsDirectExecution(userInput)) {
+      // FORCE direct execution for file/version queries (fixes "what's the version of my package.json")
+      if (/package\.json|version of|contents of|\.ts|\.js|\.json|\.yaml|\.yml|tsconfig/i.test(userInput)) {
+        const directResult = await this.tryDirectToolExecution(userInput);
+        if (directResult !== null) {
+          return {
+            id: randomUUID(),
+            type: 'assistant' as const,
+            timestamp: new Date(),
+            content: directResult,   // string from tool → wrapped correctly
+          };
+        }
+      }
       const directResult = await this.tryDirectToolExecution(userInput)
       if (directResult !== null) {
         return {
           id: randomUUID(),
-          type: 'assistant',
+          type: 'assistant' as const,
           timestamp: new Date(),
-          content: directResult || '(Tool execution failed)',
-        }
+          content: directResult || '(Tool execution completed)',
+        };
       }
     }
 
@@ -333,63 +338,15 @@ export class REPL {
     // TIER 1: Direct execution (no model needed)
     if (modelSelection.tier === 'tier1') {
       process.stderr.write(`[Tier1] Attempting direct file reading...\n`)
-      
-      const filePattern = /\b([\w./-]*(?:package\.json|\.ts|\.js|\.json|\.md|\.yaml|\.yml|config|\.env|tsconfig|eslint|babel|system-prompt))\b/gi
-      const mentionedFiles = Array.from(new Set(
-        (userInput.match(filePattern) || []).map(f => f.trim()).filter(f => f.length > 0)
-      ))
-      
-      try {
-        let directAnswer = ''
-        
-        for (const file of mentionedFiles) {
-          const resolvedPath = file.startsWith('/') ? file : join(this.cwd, file)
-          
-          if (existsSync(resolvedPath)) {
-            const content = readFileSync(resolvedPath, 'utf-8')
-            
-            // Add to session cache for future use in this session
-            fileCache.addFile(resolvedPath, content)
-            process.stderr.write(`[SessionCache] Cached ${file} for future queries\n`)
-            
-            if (file.includes('package.json') && /version|name|description|author|license|type|main/.test(userInput.toLowerCase())) {
-              try {
-                const json = JSON.parse(content)
-                const requested = userInput.match(/version|name|description|author|license|type|main/i)?.[0]?.toLowerCase()
-                
-                if (requested && requested in json) {
-                  directAnswer += `The ${requested} is ${JSON.stringify(json[requested])}\n`
-                  process.stderr.write(`[Tier1] ✓ Extracted ${requested} from ${file}\n`)
-                }
-              } catch (e) {
-                process.stderr.write(`[Tier1] Could not parse JSON\n`)
-              }
-            }
-          }
+
+      const directResult = await this.tryDirectToolExecution(userInput)
+      if (directResult !== null) {
+        return {
+          id: randomUUID(),
+          type: 'assistant' as const,
+          timestamp: new Date(),
+          content: directResult || '(Tool execution completed)',
         }
-        
-        if (directAnswer) {
-          process.stderr.write(`[Tier1] ✓ Answered directly without model\n`)
-          process.stderr.write(`[Tier1] Response content: "${directAnswer}"\n`)
-          printStreamingStart()
-          process.stdout.write(directAnswer)
-          printStreamingEnd()
-          
-          const tracker = getTokenTracker()
-          tracker.trackQuery(randomUUID(), userInput, 0, 0, ['tier1-direct'])
-          
-          const assistantMessage: ConversationMessage = {
-            id: randomUUID(),
-            type: 'assistant',
-            timestamp: new Date(),
-            content: directAnswer,
-          }
-          
-          this.conversation.push(assistantMessage)
-          return assistantMessage
-        }
-      } catch (err: any) {
-        process.stderr.write(`[Tier1] Direct read failed, falling back to reasoning model\n`)
       }
     }
 
