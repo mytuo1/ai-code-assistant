@@ -1369,6 +1369,28 @@ export class REPL {
   private async tryResumeSession(): Promise<boolean> {
     const sessionFile = this.expandPath(this.config.conversation.sessionFile)
 
+    // === STRONG CORRUPTION GUARD (runs on every startup) ===
+    if (existsSync(sessionFile)) {
+      try {
+        const data = readFileSync(sessionFile, 'utf-8')
+
+        // Catch the exact placeholder that is breaking everything
+        if (data.includes('REPLACE ME') || data.includes('1 |')) {
+          process.stderr.write(`[REPL] Found placeholder "REPLACE ME" in session file. Deleting it permanently.\n`)
+          rmSync(sessionFile, { force: true })
+          return false
+        }
+
+        // Normal parse test
+        JSON.parse(data)
+      } catch (err: any) {
+        process.stderr.write(`[REPL] Corrupted session file (${sessionFile}). Deleting it.\n`)
+        try { rmSync(sessionFile, { force: true }) } catch {}
+        return false
+      }
+    }
+    // === END CORRUPTION GUARD ===
+
     // Immediate corruption check BEFORE showing any prompt
     if (existsSync(sessionFile)) {
       try {
