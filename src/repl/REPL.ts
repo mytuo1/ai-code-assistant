@@ -1307,34 +1307,18 @@ export class REPL {
     return output
   }
 
-  /**
-   * Try to resume last session — now with strong corruption guard
-   */
   private async tryResumeSession(): Promise<boolean> {
     const sessionFile = this.expandPath(this.config.conversation.sessionFile)
 
-    // === STRONG CORRUPTION GUARD (runs on every startup) ===
-    if (existsSync(sessionFile)) {
-      const data = readFileSync(sessionFile, 'utf-8')
-      if (data.includes('REPLACE ME') || data.includes('1 |')) {
-        process.stderr.write(`[REPL] Deleting corrupted session file with placeholder\n`)
-        rmSync(sessionFile, { force: true })
-      }
-    }
-    // === END CORRUPTION GUARD ===
-
-    // Immediate corruption check BEFORE showing any prompt
     if (existsSync(sessionFile)) {
       try {
         const data = readFileSync(sessionFile, 'utf-8')
-        JSON.parse(data) // test parse
-      } catch (err: any) {
-        process.stderr.write(`[REPL] Corrupted session file detected (${sessionFile}). Deleting it.\n`)
-        try {
+        if (data.includes('REPLACE ME') || data.includes('1 |')) {
+          process.stderr.write(`[REPL] Deleting corrupted session file with placeholder\n`)
           rmSync(sessionFile, { force: true })
-        } catch {}
-        // Fall through to fresh session
-        return false
+        }
+      } catch {
+        rmSync(sessionFile, { force: true })
       }
     }
 
@@ -1342,14 +1326,8 @@ export class REPL {
       return false
     }
 
-    // Prompt user (file is now guaranteed valid)
-    const shouldResume = await promptConfirmation(
-      'Resume last session? (Yes/No)'
-    )
-
-    if (!shouldResume) {
-      return false
-    }
+    const shouldResume = await promptConfirmation('Resume last session? (Yes/No)')
+    if (!shouldResume) return false
 
     try {
       const data = readFileSync(sessionFile, 'utf-8')
@@ -1358,16 +1336,12 @@ export class REPL {
 
       if (lastSession && lastSession.messages) {
         this.conversation = lastSession.messages
-        process.stdout.write(
-          `\x1b[2;36m[Resumed ${this.conversation.length} messages]\x1b[0m\n\n`
-        )
+        process.stdout.write(`\x1b[2;36m[Resumed ${this.conversation.length} messages]\x1b[0m\n\n`)
         return true
       }
-    } catch (err: any) {
-      process.stderr.write(`[REPL] Unexpected session error. Starting fresh.\n`)
-      try { rmSync(sessionFile, { force: true }) } catch {}
+    } catch {
+      rmSync(sessionFile, { force: true })
     }
-
     return false
   }
 
