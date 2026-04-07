@@ -25,6 +25,7 @@ export interface ToolExecutionResult {
 
 export async function executeTool(
   toolName: string,
+  availableTools: Tools,
   userQuery: string,
   tool: any,
   context: ToolUseContext,
@@ -36,7 +37,7 @@ export async function executeTool(
     const params = extractToolParams(userQuery);
     process.stderr.write(`[Tool] Executing ${toolName} with params: ${JSON.stringify(params)}\n`);
 
-    // Permission
+    // Permission check
     let permission: string | boolean = 'allow';
     try {
       const permResult = await canUse();
@@ -45,7 +46,6 @@ export async function executeTool(
       process.stderr.write(`[Tool] Permission check failed: ${err}\n`);
     }
 
-    // Allow both string 'allow' and boolean true
     if (permission !== 'allow' && permission !== true && permission !== 'yes') {
       return {
         toolName,
@@ -57,9 +57,22 @@ export async function executeTool(
 
     let result: any = null;
 
-    // === EDIT PATH ===
+    // === EDIT PATH - Read first, then edit (more reliable) ===
     if (params.isEdit && (tool.name.includes('Edit') || tool.name === 'FileEditTool')) {
       process.stderr.write(`[Tool] Using FileEditTool (str_replace) for ${params.file_path}\n`);
+
+      // Step 1: Read the current file to get exact content
+      const readTool = availableTools.find(t => t.name === 'Read' || t.name.includes('Read'));
+      let currentContent = '';
+      if (readTool && params.file_path) {
+        try {
+          const readResult = await readTool.call({ file_path: params.file_path }, context, canUse, null);
+          currentContent = readResult?.data?.file?.content || readResult?.data?.content || '';
+          process.stderr.write(`[Tool] Read current content for edit (${currentContent.length} chars)\n`);
+        } catch (readErr) {
+          process.stderr.write(`[Tool] Failed to read file before edit: ${readErr}\n`);
+        }
+      }
 
       const editParams = {
         file_path: params.file_path,
@@ -80,13 +93,13 @@ export async function executeTool(
           toolName: 'Edit',
           success: false,
           output: '',
-          error: editErr.message || 'Edit failed',
+          error: editErr.message || 'Edit failed - exact string match issue',
           duration: Date.now() - startTime,
         };
       }
     }
 
-    // === NORMAL EXECUTION (Read, Bash, etc.) ===
+    // === NORMAL EXECUTION ===
     try {
       result = await tool.call(params, context, canUse, null);
     } catch {
