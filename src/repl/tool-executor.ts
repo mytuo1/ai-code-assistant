@@ -61,6 +61,9 @@ export async function executeTool(
         new_string: params.new_string || '"version": "1.0.2"',
       };
 
+      const safeContext = context || {};
+      result = await tool.call(editParams, safeContext, canUse, null);
+      
       try {
         // Try the full fork-style call
         result = await tool.call(editParams, context, canUse, null);

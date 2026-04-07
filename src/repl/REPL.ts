@@ -452,10 +452,8 @@ private async loadTools(): Promise<void> {
       return null;
     }
 
-    // Build a safe context (never null)
     const context = this.buildToolUseContext() || {};
 
-    // Try to match and execute a tool directly
     const result = await tryDirectExecution(
       userInput,
       this.tools,
@@ -1052,50 +1050,51 @@ private async loadTools(): Promise<void> {
       return false
     }
   }
-private buildToolUseContext(): any {
-    // Full context required by FileEditTool and other tools
+
+  private buildToolUseContext(): any {
+  // Create all required properties that FileEditTool expects
     const readFileState = new Map();
     const fileHistoryState = { fileWrites: new Map(), edits: [] };
     const attributionState = { items: [] };
     const userModified = new Map();
     const dynamicSkillDirTriggers = new Set();
 
-  return {
-    options: {
-      commands: [],
-      debug: this.config.debug ?? false,
-      mainLoopModel: this.config.mainLoopModel || 'gpt-4o-mini',
-      tools: this.tools,
-      verbose: false,
-      thinkingConfig: { type: 'disabled' },
-      mcpClients: [],
-      mcpResources: {},
-      isNonInteractiveSession: true,
-      agentDefinitions: { agents: [], skipped: [] },
-      SandboxManager: {
-        annotateStderrWithSandboxFailures: (command: string, output: string) => output,
+    return {
+      options: {
+        commands: [],
+        debug: this.config.debug ?? false,
+        mainLoopModel: this.config.mainLoopModel || 'gpt-4o-mini',
+        tools: this.tools || [],
+        verbose: false,
+        thinkingConfig: { type: 'disabled' },
+        mcpClients: [],
+        mcpResources: {},
+        isNonInteractiveSession: true,
+        agentDefinitions: { agents: [], skipped: [] },
+        SandboxManager: {
+          annotateStderrWithSandboxFailures: (command: string, output: string) => output,
+        },
       },
-    },
-    abortController: this.abortController || new AbortController(),
-    readFileState,
+      abortController: this.abortController || new AbortController(),
+      readFileState,
 
-    // Required by FileEditTool
-    userModified,
-    dynamicSkillDirTriggers,
+      // Critical for FileEditTool
+      userModified,
+      dynamicSkillDirTriggers,
 
-    // Minimal state management
-    getAppState: () => ({} as any),
-    setAppState: (f: any) => {},
-    setInProgressToolUseIDs: (f: any) => new Set(),
-    setResponseLength: (f: any) => 0,
+      // Minimal state management
+      getAppState: () => ({} as any),
+      setAppState: (f: any) => { },
+      setInProgressToolUseIDs: (f: any) => new Set(),
+      setResponseLength: (f: any) => 0,
 
-    updateFileHistoryState: (f: any) => {},
-    updateAttributionState: (f: any) => {},
+      updateFileHistoryState: (f: any) => { },
+      updateAttributionState: (f: any) => { },
 
-    // Messages for context
-    messages: this.conversation || [],
-  } as any;
-}
+      // Messages for context
+      messages: this.conversation || [],
+    };
+  }
 
   /**
    * WORKAROUND: Normalize tool names due to OpenAI API bug
