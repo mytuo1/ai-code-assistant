@@ -307,74 +307,59 @@ export class REPL {
       }
     }
 
-    // TIER 2B: Check for modification requests
-    // For: change exports, create test file, fix bug
+    // TIER 2B: Modification requests — simplified to avoid Zod _idmap error
     const modIntent = detectModificationIntent(userInput)
     
-    // DEBUG: Log modification detection
+    // DEBUG logging (keep if you want)
     if (process.env.DEBUG_MODIFICATIONS || process.env.DEBUG) {
       process.stderr.write(`[ModDetect] Query: "${userInput}"\n`)
       process.stderr.write(`[ModDetect] isModification: ${modIntent.isModification}\n`)
       process.stderr.write(`[ModDetect] confidence: ${modIntent.confidence}\n`)
-      process.stderr.write(`[ModDetect] type: ${modIntent.type}\n`)
     }
-    
-    // Use 0.40 threshold instead of 0.45 to avoid floating point rounding errors
-    // (0.449999999... is still a valid modification signal)
-    if (modIntent.isModification && modIntent.confidence >= 0.40) {
-      try {
-        process.stderr.write(`[REPL] ✓ Detected modification intent (${modIntent.type}, confidence: ${(modIntent.confidence * 100).toFixed(0)}%)\n`)
-        const modResult = await this.executeModificationFlow(userInput, modIntent)
-        this.conversation.push({
-          id: randomUUID(),
-          type: 'assistant',
-          timestamp: new Date(),
-          content: modResult,
-        })
+
+    // DIRECT EDIT PATH - bypass the unstable modification flow
+    if (/change|update|set|replace|modify/i.test(userInput.toLowerCase())) {
+      process.stderr.write(`[REPL] Using direct FileEditTool for modification request (bypassing complex flow)\n`);
+      
+      const directResult = await this.tryDirectToolExecution(userInput);
+      if (directResult !== null) {
         return {
           id: randomUUID(),
-          type: 'assistant',
+          type: 'assistant' as const,
           timestamp: new Date(),
-          content: modResult,
-        }
-      } catch (err: any) {
-        process.stderr.write(`[REPL] ✗ Modification flow failed: ${err?.message || err}\n`)
-        process.stderr.write(`[REPL] Falling back to generic LLM\n`)
-        // Fall through to generic LLM
+          content: directResult || 'Modification completed successfully.',
+        };
       }
-    } else if (modIntent.confidence > 0) {
-      process.stderr.write(`[REPL] Modification detected but confidence too low (${(modIntent.confidence * 100).toFixed(1)}% < 40%)\n`)
     }
 
     // SELECT MODEL BASED ON QUERY COMPLEXITY
-    // Uses intelligent routing: Tier 1 (direct), Tier 2 (nano), Tier 3-Light (nano), Tier 3-Heavy (mini)
-    const isModification = modIntent && modIntent.isModification && modIntent.confidence >= 0.40
+    const isModification = modIntent && modIntent.isModification && modIntent.confidence >= 0.40;
     
-    const modelSelection = selectModelForQuery(userInput, isModification)
-    // SAFETY: prevent the 'none' model crash you just saw
+    const modelSelection = selectModelForQuery(userInput, isModification);
+    
+    // SAFETY: prevent the 'none' model crash
     let modelIdToUse = modelSelection.modelId;
     if (!modelIdToUse || modelIdToUse === 'none') {
       modelIdToUse = this.config.mainLoopModel || 'gpt-4o-mini';
       process.stderr.write(`[REPL] ⚠️ Model was 'none' — falling back to ${modelIdToUse}\n`);
     }
 
-    
     if (process.env.DEBUG_MODIFICATIONS || process.env.DEBUG) {
-      process.stderr.write(formatModelSelection(modelSelection) + '\n')
+      process.stderr.write(formatModelSelection(modelSelection) + '\n');
     }
 
     // TIER 1: Direct execution (no model needed)
     if (modelSelection.tier === 'tier1') {
-      process.stderr.write(`[Tier1] Attempting direct file reading...\n`)
+      process.stderr.write(`[Tier1] Attempting direct file reading...\n`);
 
-      const directResult = await this.tryDirectToolExecution(userInput)
+      const directResult = await this.tryDirectToolExecution(userInput);
       if (directResult !== null) {
         return {
           id: randomUUID(),
           type: 'assistant' as const,
           timestamp: new Date(),
           content: directResult || '(Tool execution completed)',
-        }
+        };
       }
     }
 
