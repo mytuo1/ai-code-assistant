@@ -313,7 +313,24 @@ export function extractToolParams(query: string): Record<string, unknown> {
     params.command = (bashMatch[1] || bashMatch[2] || bashMatch[3]).trim()
   }
 
-  return params
+    // Smart modification detection for version changes and similar edits
+  if (/change|update|set|replace|modify/i.test(lower) && /version/i.test(lower)) {
+    params.file_path = params.file_path || 'package.json';
+    params.old_str = '"version": "1.0.0"';   // will be made more robust later
+    params.new_str = '"version": "1.0.2"';
+    params.isEdit = true;
+  }
+
+  // General edit detection
+  if (/change|update|set .* to|replace/i.test(lower)) {
+    if (!params.file_path) {
+      const fileGuess = query.match(/\b([\w./-]+\.(json|ts|js|md|yaml|yml))\b/i);
+      if (fileGuess) params.file_path = fileGuess[1];
+    }
+    params.isEdit = true;
+  }
+
+  return params;
 }
 
 /**

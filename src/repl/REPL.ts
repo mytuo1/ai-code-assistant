@@ -265,6 +265,21 @@ export class REPL {
         }
       }
     }
+
+        // Force modification path for change/update requests
+    if (/change|update|set|replace|modify/i.test(userInput.toLowerCase())) {
+      process.stderr.write(`[REPL] Forcing modification tool for edit request\n`);
+      const directResult = await this.tryDirectToolExecution(userInput);
+      if (directResult !== null) {
+        return {
+          id: randomUUID(),
+          type: 'assistant' as const,
+          timestamp: new Date(),
+          content: directResult || '(Modification completed)',
+        };
+      }
+    }
+    
     // TIER 2: Check for debug/fix requests
     // For: "something's not working", "fix this error", etc.
     const debugIntent = detectDebugIntent(userInput)
