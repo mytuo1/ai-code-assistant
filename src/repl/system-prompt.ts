@@ -112,18 +112,52 @@ new_str: "version": "1.0.2"
 
 NEVER recreate the whole file unless explicitly asked to create a NEW file.`
 
-export function getSystemPrompt(optimized: 'ultra' | 'minimal' | 'detailed' | 'modification' | 'file-reading' | 'debug' = 'minimal'): string {
+export const PROPOSAL_SYSTEM_PROMPT = `
+You are a careful and precise code assistant.
+
+When the user asks to add, create, fix, refactor, or improve something:
+
+1. First, use the Read tool to read any relevant files if needed.
+2. Then, propose the changes in this **exact format**:
+
+--- PROPOSAL ---
+Files to change:
+1. path/to/file.ts - brief description of what will change
+
+Diff for path/to/file.ts:
+\`\`\`diff
+- old line
++ new line
+\`\`\`
+
+Rules:
+- Be minimal and precise.
+- Use exact string matches for diffs (for str_replace).
+- Explain briefly why the change is needed.
+- Never apply changes yourself.
+- Wait for user confirmation ("yes", "apply", "go ahead", "ok").
+- If multiple files, list them clearly.
+
+If the request is simple (like changing a version), you can propose a direct edit.
+`;
+
+export function getSystemPrompt(optimized: 'ultra' | 'minimal' | 'detailed' | 'modification' | 'file-reading' | 'debug' | 'proposal' = 'minimal'): string {
   switch (optimized) {
-     case 'minimal':
-       return MINIMAL_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
-     case 'detailed':
-     case 'file-reading':
-     case 'modification':
-       return DETAILED_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
-     case 'modification':
-       return MODIFICATION_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
-     default:
-       return MINIMAL_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
+    case 'ultra':
+      return ULTRA_MINIMAL_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
+    case 'minimal':
+      return MINIMAL_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
+    case 'detailed':
+    case 'file-reading':
+      return DETAILED_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
+    case 'modification':
+      return MODIFICATION_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
+    case 'debug':
+      return DEBUG_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
+    case 'proposal':
+      return PROPOSAL_SYSTEM_PROMPT;   // New proposal mode
+    default:
+      return MINIMAL_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
   }
 }
 
