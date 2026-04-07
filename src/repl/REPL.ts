@@ -237,19 +237,21 @@ export class REPL {
     // TIER 1: Try direct execution (0 API tokens)
     // For: bash pwd, read file.ts, grep pattern src/
     if (needsDirectExecution(userInput)) {
-      // FORCE direct execution for file/version queries (your exact test case)
-      if (/package\.json|version of|contents of|\.ts|\.js|\.json|\.yaml|\.yml|tsconfig/i.test(userInput)) {
-        const directResult = await this.tryDirectToolExecution(userInput);
-        if (directResult !== null) {
-          return {
-            id: randomUUID(),
-            type: 'assistant' as const,
-            timestamp: new Date(),
-            content: directResult,
-          };
-        }
-      }
       const directResult = await this.tryDirectToolExecution(userInput)
+      if (directResult !== null) {
+        return {
+          id: randomUUID(),
+          type: 'assistant' as const,
+          timestamp: new Date(),
+          content: directResult || '(Tool execution completed)',
+        };
+      }
+    }
+
+    // NEW: Strong force for file/version queries (bypasses weak router)
+    if (/package\.json|version of|contents of|what.*version|\.json/i.test(userInput.toLowerCase())) {
+      process.stderr.write(`[REPL] Forcing direct Read tool for file query\n`);
+      const directResult = await this.tryDirectToolExecution(userInput);
       if (directResult !== null) {
         return {
           id: randomUUID(),
@@ -433,9 +435,15 @@ export class REPL {
       type: 'assistant',
       timestamp: new Date(),
       content: response,
+      toolCalls: accumulator.toolCalls || [],   // ← capture tool calls
     }
 
     this.conversation.push(assistantMessage)
+
+    // NEW: If the LLM returned tool calls, execute them immediately
+    if (assistantMessage.toolCalls && assistantMessage.toolCalls.length > 0) {
+      await this.processToolCalls(assistantMessage.toolCalls, userInput, assistantMessage)
+    }
 
     return assistantMessage
   }
@@ -1371,22 +1379,10 @@ export class REPL {
 
     // === STRONG CORRUPTION GUARD (runs on every startup) ===
     if (existsSync(sessionFile)) {
-      try {
-        const data = readFileSync(sessionFile, 'utf-8')
-
-        // Catch the exact placeholder that is breaking everything
-        if (data.includes('REPLACE ME') || data.includes('1 |')) {
-          process.stderr.write(`[REPL] Found placeholder "REPLACE ME" in session file. Deleting it permanently.\n`)
-          rmSync(sessionFile, { force: true })
-          return false
-        }
-
-        // Normal parse test
-        JSON.parse(data)
-      } catch (err: any) {
-        process.stderr.write(`[REPL] Corrupted session file (${sessionFile}). Deleting it.\n`)
-        try { rmSync(sessionFile, { force: true }) } catch {}
-        return false
+      const data = readFileSync(sessionFile, 'utf-8')
+      if (data.includes('REPLACE ME') || data.includes('1 |')) {
+        process.stderr.write(`[REPL] Deleting corrupted session file with placeholder\n`)
+        rmSync(sessionFile, { force: true })
       }
     }
     // === END CORRUPTION GUARD ===
