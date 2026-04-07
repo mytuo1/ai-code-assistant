@@ -282,9 +282,9 @@ private async loadTools(): Promise<void> {
       const accumulator = await streamLLMResponse({
         messages,
         systemPrompt: asSystemPrompt(getSystemPrompt('proposal')),
-        tools: [FileReadTool], // allow reading files for accurate proposals
+        tools: [FileReadTool], 
         model: this.config.mainLoopModel || 'gpt-4o-mini',
-        maxTokens: 1200,
+        maxTokens: 1500,
         signal: this.abortController.signal,
         onToken: (token) => printStreamingToken(token),
       });
@@ -301,8 +301,8 @@ private async loadTools(): Promise<void> {
 
       if (shouldApply) {
         process.stderr.write(`[REPL] User accepted proposal. Applying changes...\n`);
-        // For now, show a placeholder (we can add auto-apply in the next step)
-        const applyResult = "Proposal accepted. Changes would be applied here (auto-apply coming soon).";
+        // Placeholder for now
+        const applyResult = "✅ Proposal accepted. (Auto-apply parser will be added next — changes not yet applied automatically.)";
         return {
           id: randomUUID(),
           type: 'assistant' as const,

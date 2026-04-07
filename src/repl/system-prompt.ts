@@ -155,7 +155,7 @@ export function getSystemPrompt(optimized: 'ultra' | 'minimal' | 'detailed' | 'm
     case 'debug':
       return DEBUG_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
     case 'proposal':
-      return PROPOSAL_SYSTEM_PROMPT;   // New proposal mode
+      return PROPOSAL_SYSTEM_PROMPT;                    // ← Use clean proposal prompt
     default:
       return MINIMAL_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
   }
