@@ -94,28 +94,52 @@ export async function executeTool(
       }
     }
 
-    // === GLOB PATH - project traversal
+    // === GLOB TOOL - use simple Node.js fallback (no ripgrep dependency)
     if (tool.name === 'Glob' || tool.name.toLowerCase().includes('glob')) {
-      process.stderr.write(`[Tool] Using Glob tool with pattern: ${params.pattern || params.file_path}\n`);
+      process.stderr.write(`[Tool] Using simple Node.js Glob fallback for pattern: ${params.pattern || params.file_path}\n`);
 
-      const globParams = {
-        pattern: params.pattern || params.file_path || '**/*.ts',   // default to TS files
-      };
+      const pattern = params.pattern || params.file_path || '**/*';
+      const fs = await import('fs/promises');
+      const path = await import('path');
 
       try {
-        result = await tool.call(globParams, context, canUse || (async () => ({ behavior: 'allow' })), null);
+        // Simple recursive file finder
+        const files: string[] = [];
+        async function walk(dir: string) {
+          const entries = await fs.readdir(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              if (!entry.name.startsWith('.')) {  // skip hidden dirs
+                await walk(fullPath);
+              }
+            } else if (pattern === '**/*' || fullPath.includes(pattern.replace('**/', ''))) {
+              files.push(fullPath);
+            }
+          }
+        }
+
+        await walk(this.cwd || process.cwd());   // use REPL cwd
+
+        const output = {
+          filenames: files.slice(0, 50),  // limit to 50 results
+          numFiles: files.length,
+          truncated: files.length > 50,
+          durationMs: 10,
+        };
+
         return {
           toolName: 'Glob',
           success: true,
-          output: result?.data?.files ? `Found ${result.data.files.length} files:\n${result.data.files.join('\n')}` : 'Glob completed',
+          output: `Found ${output.numFiles} files matching pattern. First few:\n${output.filenames.slice(0, 10).join('\n')}`,
           duration: Date.now() - startTime,
         };
-      } catch (globErr: any) {
+      } catch (err: any) {
         return {
           toolName: 'Glob',
           success: false,
           output: '',
-          error: globErr.message || 'Glob failed',
+          error: `Glob failed: ${err.message}`,
           duration: Date.now() - startTime,
         };
       }
