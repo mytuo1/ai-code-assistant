@@ -112,12 +112,13 @@ new_str: "version": "1.0.2"
 
 NEVER recreate the whole file unless explicitly asked to create a NEW file.`
 
+// Add this constant near the other prompts
 export const PROPOSAL_SYSTEM_PROMPT = `
 You are a careful and precise code assistant.
 
 When the user asks to add, create, fix, refactor, or improve something:
 
-1. First, use the Read tool to read any relevant files if needed.
+1. First, use the Read or Glob tool to explore relevant files if needed.
 2. Then, propose the changes in this **exact format**:
 
 --- PROPOSAL ---
@@ -137,8 +138,6 @@ Rules:
 - Never apply changes yourself.
 - Wait for user confirmation ("yes", "apply", "go ahead", "ok").
 - If multiple files, list them clearly.
-
-If the request is simple (like changing a version), you can propose a direct edit.
 `;
 
 export function getSystemPrompt(optimized: 'ultra' | 'minimal' | 'detailed' | 'modification' | 'file-reading' | 'debug' | 'proposal' = 'minimal'): string {
@@ -155,7 +154,7 @@ export function getSystemPrompt(optimized: 'ultra' | 'minimal' | 'detailed' | 'm
     case 'debug':
       return DEBUG_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
     case 'proposal':
-      return PROPOSAL_SYSTEM_PROMPT;                    // ← Use clean proposal prompt
+      return PROPOSAL_SYSTEM_PROMPT;   // ← This is the important line
     default:
       return MINIMAL_SYSTEM_PROMPT + TOOL_USAGE_INSTRUCTION;
   }
