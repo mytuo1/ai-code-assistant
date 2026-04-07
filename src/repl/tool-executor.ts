@@ -94,6 +94,33 @@ export async function executeTool(
       }
     }
 
+    // === GLOB PATH - project traversal
+    if (tool.name === 'Glob' || tool.name.toLowerCase().includes('glob')) {
+      process.stderr.write(`[Tool] Using Glob tool with pattern: ${params.pattern || params.file_path}\n`);
+
+      const globParams = {
+        pattern: params.pattern || params.file_path || '**/*.ts',   // default to TS files
+      };
+
+      try {
+        result = await tool.call(globParams, context, canUse || (async () => ({ behavior: 'allow' })), null);
+        return {
+          toolName: 'Glob',
+          success: true,
+          output: result?.data?.files ? `Found ${result.data.files.length} files:\n${result.data.files.join('\n')}` : 'Glob completed',
+          duration: Date.now() - startTime,
+        };
+      } catch (globErr: any) {
+        return {
+          toolName: 'Glob',
+          success: false,
+          output: '',
+          error: globErr.message || 'Glob failed',
+          duration: Date.now() - startTime,
+        };
+      }
+    }
+
     // === NORMAL EXECUTION ===
     try {
       result = await tool.call(params, context, canUse || (async () => ({ behavior: 'allow' })), null);
