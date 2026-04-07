@@ -1230,50 +1230,19 @@ export class REPL {
             toolSuccess = true
           }
 
-            if (toolSuccess) {
-              printToolResult(toolName, true, toolOutput || '')
+          if (toolSuccess) {
+            printToolResult(toolName, true, toolOutput || '')
 
-              const compressedOutput = this.compressToolResult(toolName, toolOutput || '')
+            const compressedOutput = this.compressToolResult(toolName, toolOutput || '')
 
-              // Add tool result to conversation so LLM can see it
-              this.conversation.push({
-                id: randomUUID(),
-                type: 'user',
-                timestamp: new Date(),
-                content: `Tool result for ${toolName}:\n${compressedOutput}`,
-              })
+            process.stdout.write('\n✨ \x1b[1;36mTool Result:\x1b[0m\n')
+            process.stdout.write(compressedOutput + '\n\n')
 
-              process.stdout.write('\n✨ \x1b[1;36mAssistant (after tool):\x1b[0m\n')
-
-              // Call LLM again with the tool result so it can answer nicely
-              const messagesForFollowUp = this.buildMessageContext()
-
-              const followUpAccumulator = await streamLLMResponse({
-                messages: messagesForFollowUp,
-                systemPrompt: asSystemPrompt(getSystemPrompt('minimal')),
-                tools: [],                    // no tools needed for interpretation
-                model: this.config.mainLoopModel || 'gpt-4o-mini',
-                maxTokens: 400,
-                signal: this.abortController.signal,
-                onToken: (token) => printStreamingToken(token),
-              })
-
-              printStreamingEnd()
-
-              // Print the nice LLM response
-              const niceResponse = followUpAccumulator.output || "Done."
-              process.stdout.write(niceResponse + '\n')
-
-              // Save the nice response to conversation
-              this.conversation.push({
-                id: randomUUID(),
-                type: 'assistant',
-                timestamp: new Date(),
-                content: niceResponse,
-              })
-            } else {
-              printToolResult(toolName, false, toolOutput || 'Unknown error')
-            }
+            // Simple continuation without full LLM call for now
+            process.stdout.write('\x1b[1;36mAssistant:\x1b[0m File read successfully. What next?\n')
+          } else {
+            printToolResult(toolName, false, toolOutput || 'Unknown error')
+          }
         } catch (err: any) {
           process.stderr.write(
             `[ERROR] Tool execution failed: ${err?.message || err}\n`
@@ -1338,27 +1307,33 @@ export class REPL {
     return output
   }
 
+  /**
+   * Try to resume last session — now with strong corruption guard
+   */
   private async tryResumeSession(): Promise<boolean> {
     const sessionFile = this.expandPath(this.config.conversation.sessionFile)
 
+    // Aggressive cleanup of corrupted/placeholder session files
     if (existsSync(sessionFile)) {
       try {
         const data = readFileSync(sessionFile, 'utf-8')
-        if (data.includes('REPLACE ME') || data.includes('1 |')) {
-          process.stderr.write(`[REPL] Deleting corrupted session file with placeholder\n`)
+        if (data.includes('REPLACE ME') || data.includes('1 |') || data.trim() === '') {
+          process.stderr.write(`[REPL] Deleting corrupted session file\n`)
           rmSync(sessionFile, { force: true })
         }
-      } catch {
+      } catch (e) {
         rmSync(sessionFile, { force: true })
       }
     }
 
-    (!this.config.conversation.persistSession || !existsSync(sessionFile)) {
+    if (!this.config.conversation.persistSession || !existsSync(sessionFile)) {
       return false
     }
 
     const shouldResume = await promptConfirmation('Resume last session? (Yes/No)')
-    if (!shouldResume) return false
+    if (!shouldResume) {
+      return false
+    }
 
     try {
       const data = readFileSync(sessionFile, 'utf-8')
@@ -1370,9 +1345,11 @@ export class REPL {
         process.stdout.write(`\x1b[2;36m[Resumed ${this.conversation.length} messages]\x1b[0m\n\n`)
         return true
       }
-    } catch {
-      rmSync(sessionFile, { force: true })
+    } catch (err) {
+      process.stderr.write(`[REPL] Session file invalid. Starting fresh.\n`)
+      try { rmSync(sessionFile, { force: true }) } catch {}
     }
+
     return false
   }
 
