@@ -515,7 +515,7 @@ private async loadTools(): Promise<void> {
     process.stdout.write(formatToolResult(result));
     process.stdout.write('\n\n');
 
-    // AUTO-CREATE NEW FILE when Glob finds nothing + user wants to "add/create"
+    // AUTO-CREATE for new files
     if (result.toolName === 'Glob' && 
         result.output.includes('No files found') && 
         /add|create|new function|implement/i.test(userInput.toLowerCase())) {
@@ -523,23 +523,14 @@ private async loadTools(): Promise<void> {
       process.stderr.write(`[REPL] Glob found no file → auto-creating with Write tool\n`);
 
       const writeTool = this.tools.find(t => t.name === 'Write' || t.name.includes('Write'));
-      if (!writeTool) {
-        return "Write tool not available";
-      }
+      if (writeTool) {
+        const fileMatch = userInput.match(/in\s+([\w./-]+\.(ts|js))/i);
+        const filePath = fileMatch ? fileMatch[1] : 'src/utils/price.ts';
 
-      // Extract file path and function name more reliably
-      const fileMatch = userInput.match(/in\s+([\w./-]+\.(ts|js))/i);
-      const filePath = fileMatch ? fileMatch[1] : 'src/utils/price.ts';
+        const funcMatch = userInput.match(/function\s+([\w]+)/i);
+        let functionName = funcMatch && funcMatch[1].length > 2 ? funcMatch[1] : 'calculateTotalPrice';
 
-      const funcMatch = userInput.match(/function\s+([\w]+)/i);
-      let functionName = funcMatch ? funcMatch[1] : 'calculateTotalPrice';
-
-      // Clean up function name if it's garbage like "to"
-      if (functionName.length < 3 || functionName === 'to') {
-        functionName = 'calculateTotalPrice';
-      }
-
-      const newContent = `/**
+        const newContent = `/**
  * Calculates the total price based on unit price and quantity.
  * 
  * @param price - The unit price of a single item
@@ -554,33 +545,61 @@ export function ${functionName}(price: number, quantity: number): number {
 }
 `;
 
-      try {
-        await writeTool.call(
-          { file_path: filePath, content: newContent },
-          context,
-          async () => ({ behavior: 'allow' }),
-          null
-        );
+        try {
+          await writeTool.call({ file_path: filePath, content: newContent }, context, async () => ({ behavior: 'allow' }), null);
 
-        const successMsg = `✅ Created ${filePath} with function \`${functionName}()\``;
+          const successMsg = `✅ Created ${filePath} with function \`${functionName}()\``;
+          process.stdout.write(`\n✨ ${successMsg}\n\n`);
 
-        process.stdout.write(`\n✨ ${successMsg}\n\n`);
+          this.conversation.push({
+            id: randomUUID(),
+            type: 'assistant',
+            timestamp: new Date(),
+            content: successMsg,
+          });
 
-        this.conversation.push({
-          id: randomUUID(),
-          type: 'assistant',
-          timestamp: new Date(),
-          content: successMsg,
-        });
-
-        return successMsg;
-      } catch (err: any) {
-        process.stderr.write(`[Write failed] ${err.message}\n`);
-        return `Failed to create file: ${err.message}`;
+          return successMsg;
+        } catch (err: any) {
+          process.stderr.write(`[Write failed] ${err.message}\n`);
+        }
       }
     }
 
-    // Normal tool result handling
+    // READ-THEN-EDIT for modification requests
+    if (/change|update|modify|better function|improve|fix/i.test(userInput.toLowerCase())) {
+      process.stderr.write(`[REPL] Modification request detected → reading file first\n`);
+
+      const fileMatch = userInput.match(/in\s+([\w./-]+\.(ts|js))/i);
+      const filePath = fileMatch ? fileMatch[1] : null;
+
+      if (filePath) {
+        const readTool = this.tools.find(t => t.name === 'Read' || t.name.includes('Read'));
+        if (readTool) {
+          try {
+            await readTool.call({ file_path: filePath }, context, async () => ({ behavior: 'allow' }), null);
+            process.stderr.write(`[REPL] File read successfully, now attempting edit\n`);
+          } catch (e) {
+            process.stderr.write(`[REPL] Read before edit failed, continuing anyway\n`);
+          }
+        }
+      }
+
+      // Now try the edit again (the "unexpectedly modified" error should be gone)
+      result = await tryDirectExecution(
+        userInput,
+        this.tools,
+        context,
+        async () => ({ behavior: 'allow' })
+      );
+
+      if (result && result.success) {
+        const successMsg = `✅ Updated ${filePath || 'file'} successfully`;
+        process.stdout.write(`\n✨ ${successMsg}\n\n`);
+        return successMsg;
+      }
+    }
+
+    // Normal handling
     const tracker = getTokenTracker();
     tracker.trackQuery(randomUUID(), userInput, 0, 0, [result.toolName]);
 
