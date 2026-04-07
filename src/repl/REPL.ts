@@ -1107,13 +1107,11 @@ private async loadTools(): Promise<void> {
   }
 
   private buildToolUseContext(): any {
-  // Create all required properties that FileEditTool expects
     const readFileState = new Map();
-    const fileHistoryState = { fileWrites: new Map(), edits: [] };
-    const attributionState = { items: [] };
     const userModified = new Map();
     const dynamicSkillDirTriggers = new Set();
 
+    // Minimal but sufficient context to satisfy GlobTool and FileEditTool
     return {
       options: {
         commands: [],
@@ -1131,22 +1129,26 @@ private async loadTools(): Promise<void> {
         },
       },
       abortController: this.abortController || new AbortController(),
-      readFileState,
 
-      // Critical for FileEditTool
+      // Critical fields many tools expect
+      readFileState,
       userModified,
       dynamicSkillDirTriggers,
 
-      // Minimal state management
+      // Permission / deny rules (fixes the Glob error)
+      alwaysDenyRules: new Set(),
+      permissionContext: this.permissionContext || getEmptyToolPermissionContext(),
+
+      // State stubs
       getAppState: () => ({} as any),
-      setAppState: (f: any) => { },
+      setAppState: (f: any) => {},
       setInProgressToolUseIDs: (f: any) => new Set(),
       setResponseLength: (f: any) => 0,
 
-      updateFileHistoryState: (f: any) => { },
-      updateAttributionState: (f: any) => { },
+      updateFileHistoryState: (f: any) => {},
+      updateAttributionState: (f: any) => {},
 
-      // Messages for context
+      // Conversation messages
       messages: this.conversation || [],
     };
   }
