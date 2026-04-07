@@ -1051,52 +1051,49 @@ private async loadTools(): Promise<void> {
       return false
     }
   }
-  private buildToolUseContext(): any {
-    // Create minimal state maps for tools
-    const readFileState = new Map()
-    let fileHistoryState = { fileWrites: new Map(), edits: [] }
-    let attributionState = { items: [] }
+private buildToolUseContext(): any {
+  const readFileState = new Map();
+  let fileHistoryState = { fileWrites: new Map(), edits: [] };
+  let attributionState = { items: [] };
 
-    // Build context object with required fields for FileEditTool and other tools
-    return {
-      options: {
-        commands: [],
-        debug: this.config.debug ?? false,
-        mainLoopModel: this.config.mainLoopModel,
-        tools: this.tools,
-        verbose: false,
-        thinkingConfig: { type: 'disabled' },
-        mcpClients: [],
-        mcpResources: {},
-        isNonInteractiveSession: true,
-        agentDefinitions: { agents: [], skipped: [] },
-        SandboxManager: {
-          annotateStderrWithSandboxFailures: (command: string, output: string) => output,
-        },
+  return {
+    options: {
+      commands: [],
+      debug: this.config.debug ?? false,
+      mainLoopModel: this.config.mainLoopModel,
+      tools: this.tools,
+      verbose: false,
+      thinkingConfig: { type: 'disabled' },
+      mcpClients: [],
+      mcpResources: {},
+      isNonInteractiveSession: true,
+      agentDefinitions: { agents: [], skipped: [] },
+      SandboxManager: {
+        annotateStderrWithSandboxFailures: (command: string, output: string) => output,
       },
-      abortController: this.abortController,
-      readFileState,
-      
-      // FileEditTool requires these
-      userModified: new Map(),  // Track user modifications
-      dynamicSkillDirTriggers: new Set(),  // For skill discovery
-      
-      // Minimal state getters/setters (stubs for REPL)
-      getAppState: () => ({} as any),
-      setAppState: (f: any) => {},
-      setInProgressToolUseIDs: (f: any) => new Set(),
-      setResponseLength: (f: any) => 0,
-      updateFileHistoryState: (f: any) => {
-        fileHistoryState = f(fileHistoryState)
-      },
-      updateAttributionState: (f: any) => {
-        attributionState = f(attributionState)
-      },
-      
-      // Optional callbacks (not needed for basic execution)
-      messages: this.conversation,
-    } as any
-  }
+    },
+    abortController: this.abortController,
+    readFileState,
+
+    // Required by FileEditTool
+    userModified: new Map(),
+    dynamicSkillDirTriggers: new Set(),
+
+    // Minimal state getters/setters
+    getAppState: () => ({} as any),
+    setAppState: (f: any) => {},
+    setInProgressToolUseIDs: (f: any) => new Set(),
+    setResponseLength: (f: any) => 0,
+    updateFileHistoryState: (f: any) => {
+      fileHistoryState = f(fileHistoryState);
+    },
+    updateAttributionState: (f: any) => {
+      attributionState = f(attributionState);
+    },
+
+    messages: this.conversation,
+  } as any;
+}
 
   /**
    * WORKAROUND: Normalize tool names due to OpenAI API bug
