@@ -1060,7 +1060,7 @@ private buildToolUseContext(): any {
     options: {
       commands: [],
       debug: this.config.debug ?? false,
-      mainLoopModel: this.config.mainLoopModel,
+      mainLoopModel: this.config.mainLoopModel || 'gpt-4o-mini',
       tools: this.tools,
       verbose: false,
       thinkingConfig: { type: 'disabled' },
@@ -1072,18 +1072,19 @@ private buildToolUseContext(): any {
         annotateStderrWithSandboxFailures: (command: string, output: string) => output,
       },
     },
-    abortController: this.abortController,
+    abortController: this.abortController || new AbortController(),
     readFileState,
 
-    // Required by FileEditTool
+    // Required by FileEditTool and other tools
     userModified: new Map(),
     dynamicSkillDirTriggers: new Set(),
 
-    // Minimal state getters/setters
+    // Minimal state management stubs
     getAppState: () => ({} as any),
     setAppState: (f: any) => {},
     setInProgressToolUseIDs: (f: any) => new Set(),
     setResponseLength: (f: any) => 0,
+
     updateFileHistoryState: (f: any) => {
       fileHistoryState = f(fileHistoryState);
     },
@@ -1091,7 +1092,8 @@ private buildToolUseContext(): any {
       attributionState = f(attributionState);
     },
 
-    messages: this.conversation,
+    // Messages for context
+    messages: this.conversation || [],
   } as any;
 }
 
