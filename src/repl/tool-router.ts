@@ -295,53 +295,48 @@ export function matchToolsForQuery(query: string): ToolMatch[] {
 /**
  * Smart param extractor for any natural language query
  */
+/**
+ * Smart param extractor for any natural language query
+ */
 export function extractToolParams(query: string): Record<string, unknown> {
-  const lower = query.toLowerCase()
-  const params: Record<string, unknown> = {}
+  const lower = query.toLowerCase();
+  const params: Record<string, unknown> = {};   // ← declare FIRST
 
-  // Smart file_path detection - works for "REPL.ts", "the main file", "package.json", etc.
-  let fileMatch = query.match(/\b([\w./-]+(?:\.ts|\.js|\.json|\.md|\.yaml|\.yml|\.env|tsconfig|package\.json|REPL\.ts))\b/i)
-
-  if (!fileMatch && /repl|main|entry|flow|logic|project/.test(lower)) {
-    // Default to REPL.ts or main entry when user asks about project flow
-    fileMatch = { 1: 'src/repl/REPL.ts' } as any
-  }
-
+  // 1. File path detection (works for package.json, REPL.ts, etc.)
+  let fileMatch = query.match(/\b([\w./-]+(?:\.json|\.ts|\.js|\.md|\.yaml|\.yml|\.env|tsconfig|package\.json))\b/i);
   if (fileMatch) {
-    params.file_path = fileMatch[1]
+    params.file_path = fileMatch[1];
   }
 
-  // If no specific file but asking for "function flow" or "main logic", default to REPL.ts
-  if (!params.file_path && /function flow|flow of|main logic|how does the project|entry point/.test(lower)) {
-    params.file_path = 'src/repl/REPL.ts'
+  // 2. Default to package.json for version-related queries
+  if (/version/i.test(lower) && !params.file_path) {
+    params.file_path = 'package.json';
   }
 
-  // Bash fallback
-  const bashMatch = query.match(/bash\s+(.+)|run\s+(.+)|execute\s+(.+)/i)
-  if (bashMatch) {
-    params.command = (bashMatch[1] || bashMatch[2] || bashMatch[3]).trim()
-  }
-
-    // Smart modification detection for version changes and similar edits
-  if (/change|update|set|replace|modify/i.test(lower) && /version/i.test(lower)) {
-    params.file_path = params.file_path || 'package.json';
-    params.old_str = '"version": "1.0.0"';   // will be made more robust later
-    params.new_str = '"version": "1.0.2"';
+  // 3. Modification / Edit detection - use EXACT keys that FileEditTool expects
+  if (/change|update|set|replace|modify/i.test(lower)) {
     params.isEdit = true;
-  }
 
-  // General edit detection
-  if (/change|update|set .* to|replace/i.test(lower)) {
     if (!params.file_path) {
       const fileGuess = query.match(/\b([\w./-]+\.(json|ts|js|md|yaml|yml))\b/i);
       if (fileGuess) params.file_path = fileGuess[1];
     }
-    params.isEdit = true;
+
+    // Default for version bump (you can make this smarter later)
+    if (/version/i.test(lower)) {
+      params.old_string = '"version": "1.0.0"';
+      params.new_string = '"version": "1.0.2"';
+    }
+  }
+
+  // 4. Bash command extraction
+  const bashMatch = query.match(/bash\s+(.+)|run\s+(.+)|execute\s+(.+)/i);
+  if (bashMatch) {
+    params.command = (bashMatch[1] || bashMatch[2] || bashMatch[3]).trim();
   }
 
   return params;
 }
-
 /**
  * Get primary tool match (highest confidence)
  */

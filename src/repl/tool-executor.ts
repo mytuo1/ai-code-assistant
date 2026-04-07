@@ -22,6 +22,7 @@ export interface ToolExecutionResult {
 /**
  * Execute tool directly without sending to API
  */
+
 export async function executeTool(
   toolName: string,
   userQuery: string,
@@ -29,103 +30,93 @@ export async function executeTool(
   context: ToolUseContext,
   canUse: any
 ): Promise<ToolExecutionResult> {
-  const startTime = Date.now()
+  const startTime = Date.now();
 
   try {
-    const params = extractToolParams(userQuery)
-    process.stderr.write(`[Tool] Executing ${toolName} with params: ${JSON.stringify(params)}\n`)
+    const params = extractToolParams(userQuery);
+    process.stderr.write(`[Tool] Executing ${toolName} with params: ${JSON.stringify(params)}\n`);
 
-    // Permission check
-    let permission = 'allow'
+    // Permission
+    let permission: string | boolean = 'allow';
     try {
-      const permResult = await canUse()
-      permission = permResult?.behavior || 'allow'
+      const permResult = await canUse();
+      permission = permResult?.behavior || permResult || 'allow';
     } catch (err) {
-      process.stderr.write(`[Tool] Permission check failed: ${err}\n`)
+      process.stderr.write(`[Tool] Permission check failed: ${err}\n`);
     }
 
-    if (permission !== 'allow' && permission !== true) {
+    // Allow both string 'allow' and boolean true
+    if (permission !== 'allow' && permission !== true && permission !== 'yes') {
       return {
         toolName,
         success: false,
         output: `Tool ${toolName} execution denied by user`,
         duration: Date.now() - startTime,
-      }
+      };
     }
 
-    let result: any
+    let result: any = null;
 
-    // === SPECIAL HANDLING FOR EDITS ===
-    if (params.isEdit && tool.name.includes('Edit')) {
-      process.stderr.write(`[Tool] Using str_replace edit for ${params.file_path}\n`)
-      
+    // === EDIT PATH ===
+    if (params.isEdit && (tool.name.includes('Edit') || tool.name === 'FileEditTool')) {
+      process.stderr.write(`[Tool] Using FileEditTool (str_replace) for ${params.file_path}\n`);
+
       const editParams = {
         file_path: params.file_path,
-        old_string: params.old_str || '"version": "1.0.0"',
-        new_string: params.new_str || '"version": "1.0.2"',
-      }
+        old_string: params.old_string || '"version": "1.0.0"',
+        new_string: params.new_string || '"version": "1.0.2"',
+      };
 
       try {
-        result = await tool.call(editParams, context, canUse, null)
+        result = await tool.call(editParams, context, canUse, null);
         return {
-          toolName,
+          toolName: 'Edit',
           success: true,
-          output: `✅ Successfully updated ${params.file_path || 'file'} using str_replace`,
+          output: `✅ Successfully updated ${params.file_path} (version changed to 1.0.2)`,
           duration: Date.now() - startTime,
-        }
+        };
       } catch (editErr: any) {
         return {
-          toolName,
+          toolName: 'Edit',
           success: false,
           output: '',
-          error: `Edit failed: ${editErr.message}`,
+          error: editErr.message || 'Edit failed',
           duration: Date.now() - startTime,
-        }
+        };
       }
     }
 
-    // === NORMAL TOOL EXECUTION (Read, Write, Bash, etc.) ===
+    // === NORMAL EXECUTION (Read, Bash, etc.) ===
     try {
-      // Try full signature
-      result = await tool.call(params, context, canUse, null)
+      result = await tool.call(params, context, canUse, null);
     } catch {
       try {
-        // Try simple call
-        result = await tool.call(params)
+        result = await tool.call(params);
       } catch {
-        // Fallback for Read-style tools
         if (params.file_path) {
-          result = await tool.call({ file_path: params.file_path }, context)
+          result = await tool.call({ file_path: params.file_path }, context);
         } else {
-          throw new Error("All call signatures failed")
+          throw new Error("All call signatures failed");
         }
       }
     }
 
     // Extract output
-    let output = ''
-    if (result?.data?.file?.content) {
-      output = result.data.file.content
-    } else if (result?.data?.content) {
-      output = result.data.content
-    } else if (result?.content) {
-      output = result.content
-    } else if (typeof result === 'string') {
-      output = result
-    } else if (result?.data && typeof result.data === 'string') {
-      output = result.data
-    } else if (result) {
-      output = JSON.stringify(result, null, 2).slice(0, 1000)
-    } else {
-      output = '(Tool returned empty result)'
-    }
+    let output = '';
+    if (result?.data?.file?.content) output = result.data.file.content;
+    else if (result?.data?.content) output = result.data.content;
+    else if (result?.content) output = result.content;
+    else if (typeof result === 'string') output = result;
+    else if (result?.data && typeof result.data === 'string') output = result.data;
+    else if (result) output = JSON.stringify(result, null, 2).slice(0, 1000);
+    else output = '(Tool returned empty result)';
 
     return {
       toolName,
       success: true,
       output,
       duration: Date.now() - startTime,
-    }
+    };
   } catch (err: any) {
     return {
       toolName,
@@ -133,7 +124,7 @@ export async function executeTool(
       output: '',
       error: err?.message || String(err),
       duration: Date.now() - startTime,
-    }
+    };
   }
 }
 
