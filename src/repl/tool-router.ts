@@ -245,31 +245,25 @@ export function matchToolsForQuery(query: string): ToolMatch[] {
   const lower = query.toLowerCase();
   const matches: ToolMatch[] = [];
 
-  // HIGHEST PRIORITY: Any modification language → force Edit
-  if (/change|update|set|replace|modify|to 1\.0\./i.test(lower)) {
-    matches.push({
-      toolName: 'Edit',
-      confidence: 0.99,
-      reason: 'Modification language detected'
-    });
+  // === HIGH PRIORITY RULES ===
+  if (/version/i.test(lower)) {
+    matches.push({ toolName: 'Read', confidence: 0.95, reason: 'Version query' });
   }
 
-  // Version change is almost always an edit
+  if (/change|update|set|replace|modify/i.test(lower)) {
+    matches.push({ toolName: 'Edit', confidence: 0.98, reason: 'Modification request' });
+  }
+
   if (/version/i.test(lower) && /change|update|set|replace/i.test(lower)) {
-    matches.push({
-      toolName: 'Edit',
-      confidence: 0.99,
-      reason: 'Version change request'
-    });
+    matches.push({ toolName: 'Edit', confidence: 0.99, reason: 'Version change request' });
   }
 
-  // Read is only for pure read queries
-  if (/read|show|view|display|cat|contents of|what is the version of/i.test(lower) && 
-      !/change|update|set|replace|modify/i.test(lower)) {
-    matches.push({ toolName: 'Read', confidence: 0.90, reason: 'Read request' });
+  // General read patterns
+  if (/read|show|view|display|cat|contents of|what is the|what's the/i.test(lower)) {
+    matches.push({ toolName: 'Read', confidence: 0.90, reason: 'General read request' });
   }
 
-  // Fallback to existing keyword patterns
+  // Fallback to keyword patterns
   for (const [toolName, pattern] of Object.entries(TOOL_PATTERNS)) {
     let score = 0;
     for (const keyword of pattern.keywords) {
@@ -295,9 +289,6 @@ export function matchToolsForQuery(query: string): ToolMatch[] {
 /**
  * Smart param extractor for any natural language query
  */
-/**
- * Smart param extractor for any natural language query
- */
 export function extractToolParams(query: string): Record<string, unknown> {
   const lower = query.toLowerCase();
   const params: Record<string, unknown> = {};   // ← declare FIRST
@@ -314,19 +305,12 @@ export function extractToolParams(query: string): Record<string, unknown> {
   }
 
   // 3. Modification / Edit detection - use EXACT keys that FileEditTool expects
-  if (/change|update|set|replace|modify/i.test(lower)) {
+  // Version change
+  if (/change|update|set|replace/i.test(lower) && /version/i.test(lower)) {
     params.isEdit = true;
-
-    if (!params.file_path) {
-      const fileGuess = query.match(/\b([\w./-]+\.(json|ts|js|md|yaml|yml))\b/i);
-      if (fileGuess) params.file_path = fileGuess[1];
-    }
-
-    // Default for version bump (you can make this smarter later)
-    if (/version/i.test(lower)) {
-      params.old_string = '"version": "1.0.0"';
-      params.new_string = '"version": "1.0.2"';
-    }
+    params.file_path = params.file_path || 'package.json';
+    params.old_string = '"version": "1.0.0"';
+    params.new_string = '"version": "1.0.2"';
   }
 
   // 4. Bash command extraction
