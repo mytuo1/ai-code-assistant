@@ -252,20 +252,19 @@ export class REPL {
       }
     }
 
-    // NEW: Strong force for file/version queries (bypasses weak router)
-    if (/package\.json|version of|contents of|what.*version|\.json/i.test(userInput.toLowerCase())) {
-      process.stderr.write(`[REPL] Forcing direct Read tool for file query\n`);
-      const directResult = await this.tryDirectToolExecution(userInput);
+    // Ultra-strong force for any code/file understanding query
+    if (/flow|logic|function|main|entry|how does|what is in|read .* file|show .* code|contents of/i.test(userInput.toLowerCase())) {
+      process.stderr.write(`[REPL] Forcing direct Read tool for code understanding query\n`)
+      const directResult = await this.tryDirectToolExecution(userInput)
       if (directResult !== null) {
         return {
           id: randomUUID(),
           type: 'assistant' as const,
           timestamp: new Date(),
           content: directResult || '(Tool execution completed)',
-        };
+        }
       }
     }
-
     // TIER 2: Check for debug/fix requests
     // For: "something's not working", "fix this error", etc.
     const debugIntent = detectDebugIntent(userInput)
@@ -1233,34 +1232,14 @@ export class REPL {
 
           if (toolSuccess) {
             printToolResult(toolName, true, toolOutput || '')
-            
-            // Compress large tool outputs before adding to history
+
             const compressedOutput = this.compressToolResult(toolName, toolOutput || '')
-            
-            // SIMPLE: Just print the tool result + a short summary (no follow-up LLM for now)
+
             process.stdout.write('\n✨ \x1b[1;36mTool Result:\x1b[0m\n')
             process.stdout.write(compressedOutput + '\n\n')
 
-            // Optional minimal follow-up (no extra tool schemas)
-            const messagesForFollowUp = this.buildMessageContext()
-            messagesForFollowUp.push({
-              type: 'user',
-               content: `Tool ${toolName} returned: ${compressedOutput.substring(0, 500)}...`
-            })
-
-            const followUpAccumulator = await streamLLMResponse({
-              messages: messagesForFollowUp,
-              systemPrompt: getSystemPrompt('minimal'),
-              tools: [],                    // no tools for follow-up to avoid complexity
-              model: this.config.mainLoopModel || 'gpt-4o-mini',
-              maxTokens: 300,
-              signal: this.abortController.signal,
-              onToken: (token) => printStreamingToken(token),
-            })
-
-            printStreamingEnd()
-            process.stdout.write(followUpAccumulator.output || '')
-            
+            // Simple continuation without full LLM call for now
+            process.stdout.write('\x1b[1;36mAssistant:\x1b[0m File read successfully. What next?\n')
           } else {
             printToolResult(toolName, false, toolOutput || 'Unknown error')
           }
@@ -1291,46 +1270,23 @@ export class REPL {
    */
   private buildMessageContext(): any[] {
     const messages: any[] = []
+    const recent = this.conversation.slice(-6)
 
-    // Get only recent messages (current exchange)
-    const recentMessages = this.conversation.slice(-3)
-
-    for (const msg of recentMessages) {
-      let content = msg.content
-
-      // Convert content array to string if needed
-      let contentStr =
-        typeof content === 'string'
-          ? content
-          : Array.isArray(content)
-            ? content
-                .map((c: any) => c.text || c.name || JSON.stringify(c))
-                .join('\n')
-            : String(content)
-
-      // Compress large content and replace with cache references
-      if (contentStr.length > 2000) {
-        // Store in cache and get reference
-        const cacheRef = this.contextCache.store(
-          contentStr,
-          msg.type === 'assistant' ? 'response' : 'file'
-        )
-        contentStr = cacheRef
-      }
-
-      // Compress tool outputs
-      if (contentStr.includes('[Tool output]') || contentStr.includes('lines omitted')) {
-        contentStr = compressToolOutput(contentStr, 20)
+    for (const msg of recent) {
+      let content = ''
+      if (typeof msg.content === 'string') {
+        content = msg.content
+      } else if (Array.isArray(msg.content)) {
+        content = msg.content.map((c: any) => c.text || c.content || '').join('\n')
+      } else {
+        content = String(msg.content || '')
       }
 
       messages.push({
-        type: msg.type,
-        message: {
-          content: contentStr,
-        },
+        role: msg.type === 'user' ? 'user' : 'assistant',
+        content: content,
       })
     }
-
     return messages
   }
 

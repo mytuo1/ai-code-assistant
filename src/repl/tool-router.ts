@@ -187,7 +187,8 @@ const TOOL_PATTERNS: Record<string, { keywords: string[]; confidence: number }> 
 const DIRECT_EXECUTION_KEYWORDS = [
   'read', 'bash', 'run', 'execute', 'search', 'find', 'grep',
   'list', 'show', 'view', 'cat', 'ls', 'pwd', 'cd',
-  'package.json', 'version of', 'what.*version', 'contents of', 'show me the'
+  'package.json', 'version of', 'what.*version', 'contents of', 'show me the',
+  'whats the version', 'what is the version', 'version of my', 'package version'
 ]
 
 /**
@@ -216,37 +217,6 @@ export function needsDirectExecution(query: string): boolean {
   return false
 }
 
-/**
- * Improved param extractor — now handles real file ops
- */
-export function extractToolParams(query: string): Record<string, unknown> {
-  const lower = query.toLowerCase();
-  const params: Record<string, unknown> = {};
-
-  // Extract file_path for Read/Write/Edit (most common case)
-  const fileMatch = query.match(/\b([\w./-]+(?:\.json|\.ts|\.js|\.md|\.yaml|\.yml|\.env|tsconfig|package\.json))\b/i);
-  if (fileMatch) {
-    params.file_path = fileMatch[1];
-  }
-
-  // Bash command extraction
-  const bashMatch = query.match(/bash\s+(.+)|run\s+(.+)|execute\s+(.+)/i);
-  if (bashMatch) {
-    params.command = (bashMatch[1] || bashMatch[2] || bashMatch[3]).trim();
-  }
-
-  // Simple content for Write (if user gave code block or "with ...")
-  const contentMatch = query.match(/with content:\s*([\s\S]+?)(?=\s+(?:for|to|in)|$)/i);
-  if (contentMatch) params.content = contentMatch[1].trim();
-
-  // Edit old_str/new_str stub (modification flow handles full str_replace)
-  if (/replace|change|edit/i.test(lower) && params.file_path) {
-    params.old_str = "TODO_EXACT_FROM_FILE"; // modification-executor will fill
-    params.new_str = "UPDATED_CONTENT";
-  }
-
-  return params;
-}
 
 /**
  * Check if result needs LLM interpretation (output is large/complex)
@@ -268,22 +238,35 @@ export function needsLLMInterpretation(output: string): boolean {
  * Match tools for a query
  * Returns ranked list of matching tools
  */
+/**
+ * Improved natural language tool matching
+ */
 export function matchToolsForQuery(query: string): ToolMatch[] {
   const lower = query.toLowerCase()
   const matches: ToolMatch[] = []
 
-  // Score all tools
+  // Special high-confidence rules for common patterns
+  if (/version|name|description|author|main|type|license/.test(lower) && /package\.json|package/.test(lower)) {
+    matches.push({ toolName: 'Read', confidence: 0.98, reason: 'Package version query' })
+  }
+
+  if (/function flow|flow of|main logic|how does|what does .* do|entry point|read .* file|show .* code|contents of/.test(lower)) {
+    matches.push({ toolName: 'Read', confidence: 0.95, reason: 'Code understanding / file content query' })
+  }
+
+  // General file read patterns
+  if (/read|show|view|display|cat|open|contents of|what is in/.test(lower)) {
+    matches.push({ toolName: 'Read', confidence: 0.90, reason: 'General read request' })
+  }
+
+  // Fallback to keyword system for other tools
   for (const [toolName, pattern] of Object.entries(TOOL_PATTERNS)) {
     let score = 0
-
-    // Check each keyword
     for (const keyword of pattern.keywords) {
       if (lower.includes(keyword)) {
         score = Math.max(score, pattern.confidence)
       }
     }
-
-    // Add to matches if score > 0
     if (score > 0) {
       matches.push({
         toolName,
@@ -293,10 +276,44 @@ export function matchToolsForQuery(query: string): ToolMatch[] {
     }
   }
 
-  // Sort by confidence descending
-  matches.sort((a, b) => b.confidence - a.confidence)
+  // Remove duplicates and sort by confidence
+  const unique = matches.filter((v, i, a) => a.findIndex(t => t.toolName === v.toolName) === i)
+  unique.sort((a, b) => b.confidence - a.confidence)
 
-  return matches
+  return unique
+}
+
+/**
+ * Smart param extractor for any natural language query
+ */
+export function extractToolParams(query: string): Record<string, unknown> {
+  const lower = query.toLowerCase()
+  const params: Record<string, unknown> = {}
+
+  // Smart file_path detection - works for "REPL.ts", "the main file", "package.json", etc.
+  let fileMatch = query.match(/\b([\w./-]+(?:\.ts|\.js|\.json|\.md|\.yaml|\.yml|\.env|tsconfig|package\.json|REPL\.ts))\b/i)
+
+  if (!fileMatch && /repl|main|entry|flow|logic|project/.test(lower)) {
+    // Default to REPL.ts or main entry when user asks about project flow
+    fileMatch = { 1: 'src/repl/REPL.ts' } as any
+  }
+
+  if (fileMatch) {
+    params.file_path = fileMatch[1]
+  }
+
+  // If no specific file but asking for "function flow" or "main logic", default to REPL.ts
+  if (!params.file_path && /function flow|flow of|main logic|how does the project|entry point/.test(lower)) {
+    params.file_path = 'src/repl/REPL.ts'
+  }
+
+  // Bash fallback
+  const bashMatch = query.match(/bash\s+(.+)|run\s+(.+)|execute\s+(.+)/i)
+  if (bashMatch) {
+    params.command = (bashMatch[1] || bashMatch[2] || bashMatch[3]).trim()
+  }
+
+  return params
 }
 
 /**

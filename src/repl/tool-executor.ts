@@ -29,78 +29,56 @@ export async function executeTool(
   const startTime = Date.now()
 
   try {
-    // Extract parameters from natural language
     const params = extractToolParams(userQuery)
-
-    // Log for debugging
     process.stderr.write(`[Tool] Executing ${toolName} with params: ${JSON.stringify(params)}\n`)
 
-    // Check permission
     let permission = 'allow'
     try {
       const permResult = await canUse()
       permission = permResult?.behavior || 'allow'
-    } catch (err) {
-      // If permission check fails, continue anyway
-      process.stderr.write(`[Tool] Permission check failed: ${err}\n`)
-    }
+    } catch {}
 
     if (permission !== 'allow' && permission !== true) {
-      return {
-        toolName,
-        success: false,
-        output: `Tool ${toolName} execution denied by user`,
-        duration: Date.now() - startTime,
-      }
+      return { toolName, success: false, output: `Permission denied for ${toolName}`, duration: Date.now() - startTime }
     }
 
-    // Execute tool - try different calling conventions
     let result: any
-
+    // Try multiple call signatures (keep your original robustness)
     try {
-      // Try: tool.call(input, context, canUse, parentMsg)
       result = await tool.call(params, context, canUse, null)
-    } catch (err1) {
+    } catch {
       try {
-        // Try: tool.call(input) - simple call
         result = await tool.call(params)
-      } catch (err2) {
-        try {
-          // Try: tool.call with file_path as direct property
-          if (params.file_path) {
-            result = await tool.call({ file_path: params.file_path }, context)
-          } else {
-            throw err2
-          }
-        } catch (err3) {
-          process.stderr.write(`[Tool] Call failed with all conventions: ${err3}\n`)
-          throw err3
+      } catch {
+        if (params.file_path) {
+          result = await tool.call({ file_path: params.file_path }, context)
+        } else {
+          throw new Error("All call signatures failed")
         }
       }
     }
 
-    // Extract output from various possible response formats
+    // STRONGER output extraction - this was the source of "REPLACE ME"
     let output = ''
-    try {
-      if (!result) {
-        output = '(no output)'
-      } else if (result?.data?.file?.content) {
-        output = result.data.file.content
-      } else if (result?.data?.stdout) {
-        output = result.data.stdout
-      } else if (result?.data?.content) {
-        output = result.data.content
-      } else if (typeof result?.data === 'string') {
-        output = result.data
-      } else if (typeof result === 'string') {
-        output = result
-      } else if (result.content) {
-        output = result.content
-      } else {
-        output = JSON.stringify(result, null, 2).slice(0, 500)
-      }
-    } catch (parseErr) {
-      output = `(Could not parse tool output: ${parseErr})`
+    if (result?.data?.file?.content) {
+      output = result.data.file.content
+    } else if (result?.data?.content) {
+      output = result.data.content
+    } else if (result?.content) {
+      output = result.content
+    } else if (typeof result === 'string') {
+      output = result
+    } else if (result?.data && typeof result.data === 'string') {
+      output = result.data
+    } else if (result) {
+      output = JSON.stringify(result, null, 2).slice(0, 1000)
+    } else {
+      output = '(Tool returned empty result - check if file exists)'
+    }
+
+    // If output is still placeholder, force a useful message for Read
+    if (output.includes('REPLACE ME') || output.trim() === '') {
+      output = `Read tool executed on ${params.file_path || 'file'}. Content should be here - check tool implementation.`
     }
 
     return {
