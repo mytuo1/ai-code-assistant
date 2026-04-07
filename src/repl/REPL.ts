@@ -267,15 +267,16 @@ export class REPL {
     }
 
     // Strong force for modification queries - prefer Edit over Read
+    // FORCE DIRECT EDIT PATH - bypass the crashing modification flow
     if (/change|update|set|replace|modify/i.test(userInput.toLowerCase())) {
-      process.stderr.write(`[REPL] Forcing Edit tool for modification request\n`);
+      process.stderr.write(`[REPL] Forcing direct FileEditTool (bypassing modification flow to avoid _idmap error)\n`);
       const directResult = await this.tryDirectToolExecution(userInput);
       if (directResult !== null) {
         return {
           id: randomUUID(),
           type: 'assistant' as const,
           timestamp: new Date(),
-          content: directResult || '(Modification completed)',
+          content: directResult || 'Modification completed.',
         };
       }
     }

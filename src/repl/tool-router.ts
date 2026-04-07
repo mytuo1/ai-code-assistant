@@ -246,12 +246,8 @@ export function matchToolsForQuery(query: string): ToolMatch[] {
   const matches: ToolMatch[] = []
 
   // HIGH PRIORITY: Modification / Edit detection
-  if (/change|update|set|replace|modify|to 1\.0\./i.test(lower)) {
-    matches.push({ 
-      toolName: 'Edit', 
-      confidence: 0.97, 
-      reason: 'Modification language detected' 
-    });
+  if (/change|update|set|replace|modify/i.test(lower)) {
+    matches.push({ toolName: 'Edit', confidence: 0.98, reason: 'Modification language detected' });
   }
 
   // Version change is a strong edit signal
