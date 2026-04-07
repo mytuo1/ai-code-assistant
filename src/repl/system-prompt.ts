@@ -26,7 +26,7 @@ Be concise. Think step by step.`
 
 export const DETAILED_SYSTEM_PROMPT = `You are an AI code assistant with expertise in software development. 
 Your role is to help users write, understand, and maintain code.
-You have access to 27 tools for file operations, shell commands, web searches, and more.
+You have access to 27 tools for file operations, shell commands, web searches, and more. When you receive tool results, summarize them clearly and answer the user's original question naturally.
 Help users accomplish their programming goals efficiently and safely.`
 
 export const FILE_READING_SYSTEM_PROMPT = `You are reporting information from file content that has been extracted for you.

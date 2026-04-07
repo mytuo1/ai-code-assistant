@@ -1230,19 +1230,50 @@ export class REPL {
             toolSuccess = true
           }
 
-          if (toolSuccess) {
-            printToolResult(toolName, true, toolOutput || '')
+            if (toolSuccess) {
+              printToolResult(toolName, true, toolOutput || '')
 
-            const compressedOutput = this.compressToolResult(toolName, toolOutput || '')
+              const compressedOutput = this.compressToolResult(toolName, toolOutput || '')
 
-            process.stdout.write('\n✨ \x1b[1;36mTool Result:\x1b[0m\n')
-            process.stdout.write(compressedOutput + '\n\n')
+              // Add tool result to conversation so LLM can see it
+              this.conversation.push({
+                id: randomUUID(),
+                type: 'user',
+                timestamp: new Date(),
+                content: `Tool result for ${toolName}:\n${compressedOutput}`,
+              })
 
-            // Simple continuation without full LLM call for now
-            process.stdout.write('\x1b[1;36mAssistant:\x1b[0m File read successfully. What next?\n')
-          } else {
-            printToolResult(toolName, false, toolOutput || 'Unknown error')
-          }
+              process.stdout.write('\n✨ \x1b[1;36mAssistant (after tool):\x1b[0m\n')
+
+              // Call LLM again with the tool result so it can answer nicely
+              const messagesForFollowUp = this.buildMessageContext()
+
+              const followUpAccumulator = await streamLLMResponse({
+                messages: messagesForFollowUp,
+                systemPrompt: asSystemPrompt(getSystemPrompt('minimal')),
+                tools: [],                    // no tools needed for interpretation
+                model: this.config.mainLoopModel || 'gpt-4o-mini',
+                maxTokens: 400,
+                signal: this.abortController.signal,
+                onToken: (token) => printStreamingToken(token),
+              })
+
+              printStreamingEnd()
+
+              // Print the nice LLM response
+              const niceResponse = followUpAccumulator.output || "Done."
+              process.stdout.write(niceResponse + '\n')
+
+              // Save the nice response to conversation
+              this.conversation.push({
+                id: randomUUID(),
+                type: 'assistant',
+                timestamp: new Date(),
+                content: niceResponse,
+              })
+            } else {
+              printToolResult(toolName, false, toolOutput || 'Unknown error')
+            }
         } catch (err: any) {
           process.stderr.write(
             `[ERROR] Tool execution failed: ${err?.message || err}\n`
@@ -1322,7 +1353,7 @@ export class REPL {
       }
     }
 
-    if (!this.config.conversation.persistSession || !existsSync(sessionFile)) {
+    (!this.config.conversation.persistSession || !existsSync(sessionFile)) {
       return false
     }
 
