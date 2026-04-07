@@ -449,40 +449,42 @@ private async loadTools(): Promise<void> {
   private async tryDirectToolExecution(userInput: string): Promise<string | null> {
     // Check if query needs direct execution
     if (!needsDirectExecution(userInput)) {
-      return null // No direct match, use LLM
+      return null;
     }
+
+    // Build a safe context (never null)
+    const context = this.buildToolUseContext() || {};
 
     // Try to match and execute a tool directly
     const result = await tryDirectExecution(
       userInput,
       this.tools,
-      this.buildToolUseContext(),
+      context,
       async () => ({ behavior: 'allow' })
-    )
+    );
 
     if (!result) {
-      return null // No tool match confidence, use LLM
+      return null; // No tool match confidence, use LLM
     }
 
     // Display tool result (success or failure)
-    process.stdout.write('\n')
-    process.stdout.write(formatToolResult(result))
-    process.stdout.write('\n\n')
+    process.stdout.write('\n');
+    process.stdout.write(formatToolResult(result));
+    process.stdout.write('\n\n');
 
     // Track tool execution
-    const tracker = getTokenTracker()
+    const tracker = getTokenTracker();
     tracker.trackQuery(
       randomUUID(),
       userInput,
-      0, // No API tokens for direct execution
+      0,
       0,
       [result.toolName]
-    )
+    );
 
-    // If tool FAILED, return empty string (not null) to indicate tool was attempted
-    // This prevents fallthrough to LLM
+    // If tool FAILED, return empty string to prevent fallthrough
     if (!result.success) {
-      return '' // Tool was matched and attempted, just failed - DON'T call LLM
+      return ''; 
     }
 
     // Add successful result to conversation
@@ -491,15 +493,14 @@ private async loadTools(): Promise<void> {
       type: 'assistant',
       timestamp: new Date(),
       content: buildToolResultMessage(result),
-    })
+    });
 
     // Check if result needs LLM interpretation
     if (needsLLMInterpretation(result.output)) {
-      // Ask LLM to interpret (minimal tokens)
-      return result.output
+      return result.output;
     }
 
-    return result.output // Return result directly
+    return result.output; // Return result directly
   }
 
   /**
@@ -1052,9 +1053,12 @@ private async loadTools(): Promise<void> {
     }
   }
 private buildToolUseContext(): any {
-  const readFileState = new Map();
-  let fileHistoryState = { fileWrites: new Map(), edits: [] };
-  let attributionState = { items: [] };
+    // Full context required by FileEditTool and other tools
+    const readFileState = new Map();
+    const fileHistoryState = { fileWrites: new Map(), edits: [] };
+    const attributionState = { items: [] };
+    const userModified = new Map();
+    const dynamicSkillDirTriggers = new Set();
 
   return {
     options: {
@@ -1075,22 +1079,18 @@ private buildToolUseContext(): any {
     abortController: this.abortController || new AbortController(),
     readFileState,
 
-    // Required by FileEditTool and other tools
-    userModified: new Map(),
-    dynamicSkillDirTriggers: new Set(),
+    // Required by FileEditTool
+    userModified,
+    dynamicSkillDirTriggers,
 
-    // Minimal state management stubs
+    // Minimal state management
     getAppState: () => ({} as any),
     setAppState: (f: any) => {},
     setInProgressToolUseIDs: (f: any) => new Set(),
     setResponseLength: (f: any) => 0,
 
-    updateFileHistoryState: (f: any) => {
-      fileHistoryState = f(fileHistoryState);
-    },
-    updateAttributionState: (f: any) => {
-      attributionState = f(attributionState);
-    },
+    updateFileHistoryState: (f: any) => {},
+    updateAttributionState: (f: any) => {},
 
     // Messages for context
     messages: this.conversation || [],
