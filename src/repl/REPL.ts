@@ -266,9 +266,9 @@ export class REPL {
       }
     }
 
-        // Force modification path for change/update requests
+    // Strong force for modification queries - prefer Edit over Read
     if (/change|update|set|replace|modify/i.test(userInput.toLowerCase())) {
-      process.stderr.write(`[REPL] Forcing modification tool for edit request\n`);
+      process.stderr.write(`[REPL] Forcing Edit tool for modification request\n`);
       const directResult = await this.tryDirectToolExecution(userInput);
       if (directResult !== null) {
         return {
@@ -279,7 +279,7 @@ export class REPL {
         };
       }
     }
-    
+
     // TIER 2: Check for debug/fix requests
     // For: "something's not working", "fix this error", etc.
     const debugIntent = detectDebugIntent(userInput)

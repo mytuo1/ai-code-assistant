@@ -245,26 +245,35 @@ export function matchToolsForQuery(query: string): ToolMatch[] {
   const lower = query.toLowerCase()
   const matches: ToolMatch[] = []
 
-  // Special high-confidence rules for common patterns
-  if (/version|name|description|author|main|type|license/.test(lower) && /package\.json|package/.test(lower)) {
-    matches.push({ toolName: 'Read', confidence: 0.98, reason: 'Package version query' })
+  // HIGH PRIORITY: Modification / Edit detection
+  if (/change|update|set|replace|modify|to 1\.0\./i.test(lower)) {
+    matches.push({ 
+      toolName: 'Edit', 
+      confidence: 0.97, 
+      reason: 'Modification language detected' 
+    });
   }
 
-  if (/function flow|flow of|main logic|how does|what does .* do|entry point|read .* file|show .* code|contents of/.test(lower)) {
-    matches.push({ toolName: 'Read', confidence: 0.95, reason: 'Code understanding / file content query' })
+  // Version change is a strong edit signal
+  if (/version/i.test(lower) && /change|update|set|to/i.test(lower)) {
+    matches.push({ 
+      toolName: 'Edit', 
+      confidence: 0.98, 
+      reason: 'Version change request' 
+    });
   }
 
-  // General file read patterns
-  if (/read|show|view|display|cat|open|contents of|what is in/.test(lower)) {
-    matches.push({ toolName: 'Read', confidence: 0.90, reason: 'General read request' })
+  // General file read patterns (lower priority than edit)
+  if (/read|show|view|display|cat|open|contents of|what is in|version of/i.test(lower)) {
+    matches.push({ toolName: 'Read', confidence: 0.90, reason: 'General read request' });
   }
 
-  // Fallback to keyword system for other tools
+  // Fallback to existing keyword patterns
   for (const [toolName, pattern] of Object.entries(TOOL_PATTERNS)) {
-    let score = 0
+    let score = 0;
     for (const keyword of pattern.keywords) {
       if (lower.includes(keyword)) {
-        score = Math.max(score, pattern.confidence)
+        score = Math.max(score, pattern.confidence);
       }
     }
     if (score > 0) {
@@ -272,15 +281,15 @@ export function matchToolsForQuery(query: string): ToolMatch[] {
         toolName,
         confidence: score,
         reason: `Keyword match: ${pattern.keywords.find(k => lower.includes(k))}`,
-      })
+      });
     }
   }
 
-  // Remove duplicates and sort by confidence
-  const unique = matches.filter((v, i, a) => a.findIndex(t => t.toolName === v.toolName) === i)
-  unique.sort((a, b) => b.confidence - a.confidence)
+  // Remove duplicates, keep highest confidence per tool
+  const unique = matches.filter((v, i, a) => a.findIndex(t => t.toolName === v.toolName) === i);
+  unique.sort((a, b) => b.confidence - a.confidence);
 
-  return unique
+  return unique;
 }
 
 /**
